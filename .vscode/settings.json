@@ -24,6 +24,8 @@
   ],
   "idf.port": "COM8",
   "idf.currentSetup": "F:\\ESP32\\Espressif\\v5.5.5\\esp-idf",
+  "idf.buildPath": "${workspaceFolder}/build-dev",
+  "idf.sdkconfigFilePath": "${workspaceFolder}/sdkconfig.dev",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32"
   },
@@ -31,7 +33,7 @@
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=f:\\ESP32\\Esp32_Projects\\sample_project\\build"
+    "--compile-commands-dir=f:\\ESP32\\Esp32_Projects\\sample_project/build-dev"
   ],
   "idf.flashType": "UART"
 }
