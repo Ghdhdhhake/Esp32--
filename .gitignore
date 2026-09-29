@@ -31,6 +31,11 @@ build/
 flasher_args.json # Generated in build directory
 sdkconfig.old
 sdkconfig
+# Local ESP-IDF configuration and build cache for the dev dashboard branch.
+# They must not be shared with main, whose partition layout is different.
+sdkconfig.dev
+sdkconfig.dev-backup
+build-dev/
 
 # ESP-IDF dependencies
 # For older versions or manual component management

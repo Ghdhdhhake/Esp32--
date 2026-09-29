@@ -25,6 +25,14 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Keep this feature branch self-contained.  The dashboard needs partitions.csv,
+# while main deliberately uses ESP-IDF's stock partition layout.  ESP-IDF does
+# not switch ignored sdkconfig/build files when Git switches branches, so using
+# branch-specific paths prevents one branch's generated state from breaking the
+# other one.  Override either path only for an intentional custom build.
+BUILD_DIR="${ESP_BUILD_DIR:-$PROJECT_DIR/build-dev}"
+SDKCONFIG_FILE="${ESP_SDKCONFIG:-$PROJECT_DIR/sdkconfig.dev}"
+
 # --- Adjust these two if your ESP-IDF installation lives elsewhere ---------
 export IDF_PATH="${IDF_PATH:-F:/ESP32/Espressif/v5.5.5/esp-idf}"
 export IDF_TOOLS_PATH="${IDF_TOOLS_PATH:-C:/Espressif/tools}"
@@ -51,11 +59,17 @@ if [[ ! -x "$IDF_PYTHON" ]]; then
     exit 1
 fi
 
+# Bash uses ':' between PATH entries, which would split a Windows path such as
+# C:/Espressif/tools at its drive-letter colon. Convert only the paths that are
+# appended to PATH; IDF_PATH and IDF_TOOLS_PATH stay in Windows form for
+# Windows Python.
+IDF_TOOLS_PATH_BASH="$(cygpath -u "$IDF_TOOLS_PATH")"
+
 # Put the cross toolchain, cmake and ninja on PATH.
 for candidate in \
-    "$IDF_TOOLS_PATH"/xtensa-esp-elf/*/xtensa-esp-elf/bin \
-    "$IDF_TOOLS_PATH"/cmake/*/bin \
-    "$IDF_TOOLS_PATH"/ninja/* ; do
+    "$IDF_TOOLS_PATH_BASH"/xtensa-esp-elf/*/xtensa-esp-elf/bin \
+    "$IDF_TOOLS_PATH_BASH"/cmake/*/bin \
+    "$IDF_TOOLS_PATH_BASH"/ninja/* ; do
     if [[ -d "$candidate" ]]; then
         PATH="$candidate:$PATH"
     fi
@@ -64,10 +78,10 @@ export PATH
 
 export IDF_PYTHON_ENV_PATH="$PYTHON_ENV"
 
-# The wrapper lives inside build/ (a disposable directory) so no cleanup is
+# The wrapper lives inside the isolated build directory (a disposable directory) so no cleanup is
 # needed - plain `rm` is unreliable in some sandboxed Git Bash environments.
-mkdir -p "$PROJECT_DIR/build"
-WRAPPER="$PROJECT_DIR/build/idfrun_wrapper.py"
+mkdir -p "$BUILD_DIR"
+WRAPPER="$BUILD_DIR/idfrun_wrapper.py"
 
 cat > "$WRAPPER" <<'PYEOF'
 """Call idf.main() with MSYSTEM removed so the MSYS guard is bypassed."""
@@ -89,4 +103,4 @@ if [[ $# -eq 0 ]]; then
     set -- build
 fi
 
-"$IDF_PYTHON" "$WRAPPER" "$@"
+"$IDF_PYTHON" "$WRAPPER" -B "$BUILD_DIR" -D "SDKCONFIG=$SDKCONFIG_FILE" "$@"
