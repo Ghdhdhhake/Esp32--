@@ -1,0 +1,10 @@
+﻿# Partition layout for the device dashboard.
+#
+# The stock "single app" layout only grants 1 MiB to the factory application,
+# which the dashboard plus NimBLE (observer + broadcaster) overflows. This
+# board carries 2 MiB of flash, so the application slot is grown to 1.5 MiB.
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x180000,

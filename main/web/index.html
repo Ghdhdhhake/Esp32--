@@ -14,6 +14,8 @@
       --green: #65ffd0;
       --amber: #ffc857;
       --danger: #ff6b7a;
+      --blue: #72dcff;
+      --violet: #b79bff;
       --bg: #050a0a;
     }
     * { box-sizing: border-box; }
@@ -38,8 +40,9 @@
       pointer-events: none;
       background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,255,255,.013) 3px 4px);
       mix-blend-mode: screen;
+      z-index: 0;
     }
-    main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 38px 0 54px; }
+    main { position: relative; z-index: 1; width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 38px 0 54px; }
     header {
       display: flex;
       justify-content: space-between;
@@ -48,9 +51,9 @@
       margin-bottom: 30px;
       animation: rise .65s ease both;
     }
-    .eyebrow, .mono, th, button { font-family: Consolas, "Lucida Console", monospace; }
+    .eyebrow, .mono, th, button, input, select, code { font-family: Consolas, "Lucida Console", monospace; }
     .eyebrow { color: var(--green); font-size: 11px; letter-spacing: .22em; text-transform: uppercase; }
-    h1 { margin: 9px 0 5px; font-size: clamp(34px, 7vw, 76px); line-height: .92; letter-spacing: -.055em; font-weight: 700; }
+    h1 { margin: 9px 0 5px; font-size: clamp(32px, 6.4vw, 68px); line-height: .92; letter-spacing: -.055em; font-weight: 700; }
     h1 span { color: transparent; -webkit-text-stroke: 1px rgba(223,252,243,.52); }
     .sub { margin: 0; color: var(--muted); font-size: 14px; }
     .live {
@@ -64,7 +67,7 @@
     }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 14px var(--green); animation: pulse 1.7s infinite; }
     .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 18px; }
-    .card, .network-panel {
+    .card, .panel {
       border: 1px solid var(--line);
       background: var(--panel);
       box-shadow: inset 0 1px rgba(255,255,255,.035), 0 24px 60px rgba(0,0,0,.22);
@@ -79,55 +82,109 @@
     .label { color: var(--muted); font: 10px Consolas, monospace; letter-spacing: .16em; text-transform: uppercase; }
     .value { margin-top: 27px; font-size: clamp(23px, 3vw, 34px); line-height: 1; font-weight: 650; letter-spacing: -.035em; overflow-wrap: anywhere; }
     .unit { color: var(--green); font: 11px Consolas, monospace; margin-left: 5px; }
-    .network-panel { animation: rise .6s .18s ease both; }
-    .ble-panel {
-      --green: #72dcff;
-      --line: rgba(114, 220, 255, .18);
-      margin-top: 18px;
-      animation-delay: .25s;
-    }
-    .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 20px 22px; border-bottom: 1px solid var(--line); }
+    .panel { margin-top: 18px; animation: rise .6s .18s ease both; }
+    .panel.accent-led { --green: var(--amber); --line: rgba(255, 200, 87, .2); }
+    .panel.accent-ble { --green: var(--blue); --line: rgba(114, 220, 255, .2); }
+    .panel.accent-pin { --green: var(--violet); --line: rgba(183, 155, 255, .2); }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 20px 22px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
     .panel-title { margin: 0; font-size: 18px; letter-spacing: -.01em; }
+    .panel-title small { color: var(--muted); font-size: 11px; font-weight: 400; letter-spacing: .12em; margin-left: 8px; text-transform: uppercase; }
     .panel-meta { color: var(--muted); font: 11px Consolas, monospace; margin-top: 5px; }
+    .panel-body { padding: 20px 22px; }
     button {
-      border: 1px solid rgba(101,255,208,.42);
+      border: 1px solid color-mix(in srgb, var(--green) 42%, transparent);
       color: var(--green);
-      background: rgba(101,255,208,.07);
-      padding: 10px 14px;
+      background: color-mix(in srgb, var(--green) 7%, transparent);
+      padding: 9px 13px;
       cursor: pointer;
       font-size: 11px;
       letter-spacing: .08em;
       transition: .18s ease;
+      border-radius: 2px;
     }
-    button:hover { background: var(--green); color: #04100d; box-shadow: 0 0 24px rgba(101,255,208,.25); }
-    button:disabled { cursor: wait; opacity: .5; }
+    button:hover:not(:disabled) { background: var(--green); color: #04100d; box-shadow: 0 0 24px color-mix(in srgb, var(--green) 25%, transparent); }
+    button:disabled { cursor: wait; opacity: .45; }
+    button.active { background: var(--green); color: #04100d; }
+    button.ghost { --green: var(--muted); }
+    button.danger { --green: var(--danger); }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .row + .row { margin-top: 12px; }
+    .field { display: flex; flex-direction: column; gap: 5px; min-width: 110px; }
+    .field > span { color: var(--muted); font: 10px Consolas, monospace; letter-spacing: .14em; text-transform: uppercase; }
+    .field > span i { font-style: normal; color: var(--ink); letter-spacing: 0; text-transform: none; }
+    input[type=text], input[type=password], input[type=number], select {
+      background: rgba(0,0,0,.35);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      padding: 8px 10px;
+      font-size: 12px;
+      border-radius: 2px;
+      outline: none;
+      min-width: 0;
+    }
+    input:focus, select:focus { border-color: var(--green); }
+    input[type=range] { width: 100%; accent-color: var(--green); }
+    input[type=checkbox] { accent-color: var(--green); }
+    .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+    .seg button { border: none; border-right: 1px solid var(--line); border-radius: 0; }
+    .seg button:last-child { border-right: none; }
+    .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 8px 18px; font: 11px Consolas, monospace; }
+    .kv div { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px dashed rgba(116,255,215,.1); padding-bottom: 6px; }
+    .kv b { color: var(--muted); font-weight: 400; }
+    .kv i { font-style: normal; color: var(--ink); text-align: right; overflow-wrap: anywhere; }
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th { color: var(--muted); font-size: 10px; letter-spacing: .13em; text-align: left; font-weight: 400; }
-    th, td { padding: 13px 22px; border-bottom: 1px solid rgba(116,255,215,.075); }
+    th, td { padding: 12px 22px; border-bottom: 1px solid rgba(116,255,215,.075); }
     tbody tr { transition: background .16s ease; }
     tbody tr:hover { background: rgba(101,255,208,.045); }
-    td:nth-child(1), td:nth-child(3), td:nth-child(4) { font-family: Consolas, monospace; }
+    td.num, td.mono { font-family: Consolas, monospace; }
     .signal { display: inline-flex; gap: 2px; align-items: end; margin-right: 8px; height: 12px; }
-    .signal i { display: block; width: 3px; background: rgba(101,255,208,.16); }
+    .signal i { display: block; width: 3px; background: color-mix(in srgb, var(--green) 16%, transparent); }
     .signal i:nth-child(1) { height: 3px; } .signal i:nth-child(2) { height: 6px; }
     .signal i:nth-child(3) { height: 9px; } .signal i:nth-child(4) { height: 12px; }
-    .signal i.on { background: var(--green); box-shadow: 0 0 5px rgba(101,255,208,.4); }
+    .signal i.on { background: var(--green); box-shadow: 0 0 5px color-mix(in srgb, var(--green) 40%, transparent); }
     .security { color: var(--amber); font-size: 11px; }
-    .empty { padding: 35px 22px; color: var(--muted); text-align: center; font-family: Consolas, monospace; }
-    footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 13px; color: #547068; font: 10px Consolas, monospace; }
+    .empty { padding: 30px 22px; color: var(--muted); text-align: center; font-family: Consolas, monospace; }
+    footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 13px; color: #547068; font: 10px Consolas, monospace; flex-wrap: wrap; }
     .error { color: var(--danger); }
+    .ok { color: var(--green); }
+    .warn { color: var(--amber); }
+    .pill { display: inline-block; padding: 2px 8px; border: 1px solid var(--line); font: 10px Consolas, monospace; letter-spacing: .1em; border-radius: 999px; }
+    .bar { height: 4px; background: rgba(255,255,255,.07); overflow: hidden; margin-top: 10px; }
+    .bar > i { display: block; height: 100%; width: 0; background: var(--green); box-shadow: 0 0 10px var(--green); transition: width .3s ease; }
+    .led-preview { width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line); background: #0a1512; position: relative; }
+    .led-preview::after {
+      content: ""; position: absolute; inset: 8px; border-radius: 50%;
+      background: var(--ledColor, #3a4a46);
+      opacity: var(--ledOpacity, .2);
+      box-shadow: 0 0 22px var(--ledColor, transparent);
+      transition: opacity .12s linear, background .12s linear;
+    }
+    details.diag { margin-top: 14px; border: 1px solid var(--line); border-radius: 2px; }
+    details.diag > summary { cursor: pointer; padding: 11px 14px; color: var(--muted); font: 11px Consolas, monospace; letter-spacing: .1em; }
+    details.diag[open] > summary { border-bottom: 1px solid var(--line); }
+    details.diag .kv { padding: 14px; }
+    .log-view {
+      margin: 0; padding: 14px 18px; max-height: 320px; overflow: auto;
+      background: rgba(0,0,0,.4); border: 1px solid var(--line);
+      font: 11px/1.55 Consolas, monospace; white-space: pre-wrap; word-break: break-all;
+      color: #a8d8c8; border-radius: 2px;
+    }
+    .hint { color: var(--muted); font: 11px/1.6 Consolas, monospace; margin: 10px 0 0; }
+    .hint b { color: var(--amber); font-weight: 400; }
+    canvas.spark { width: 100%; height: 74px; display: block; background: rgba(0,0,0,.35); border: 1px solid var(--line); border-radius: 2px; }
+    .adc-value { font: 700 30px/1 Consolas, monospace; letter-spacing: -.03em; }
     @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
     @keyframes pulse { 50% { opacity: .38; box-shadow: 0 0 4px var(--green); } }
-    @media (max-width: 850px) { .cards { grid-template-columns: repeat(2, 1fr); } .card:last-child { grid-column: span 2; } }
+    @media (max-width: 900px) { .cards { grid-template-columns: repeat(2, 1fr); } .card:last-child { grid-column: span 2; } }
     @media (max-width: 560px) {
-      main { width: min(100% - 20px, 1120px); padding-top: 24px; }
+      main { width: min(100% - 20px, 1180px); padding-top: 24px; }
       header { display: block; } .live { margin-top: 18px; }
       .cards { grid-template-columns: 1fr 1fr; }
       .card { min-height: 112px; padding: 14px; }
       .value { margin-top: 21px; }
-      .panel-head, th, td { padding-left: 14px; padding-right: 14px; }
-      th:nth-child(5), td:nth-child(5) { display: none; }
+      .panel-head, .panel-body, th, td { padding-left: 14px; padding-right: 14px; }
     }
   </style>
 </head>
@@ -135,9 +192,9 @@
   <main>
     <header>
       <div>
-        <div class="eyebrow">Local telemetry interface // 192.168.4.1</div>
+        <div class="eyebrow">Local control plane // 192.168.4.1</div>
         <h1>DEVICE <span>CORE</span></h1>
-        <p class="sub">Goouuu ESP-32F · isolated control plane</p>
+        <p class="sub">ESP32 单板实验室 · LED / BLE / 引脚 / 联网</p>
       </div>
       <div class="live"><span class="dot"></span><span id="linkState">LINK ACTIVE</span></div>
     </header>
@@ -147,12 +204,193 @@
       <article class="card"><div class="label">Flash storage</div><div class="value" id="flash">--</div></article>
       <article class="card"><div class="label">Free heap</div><div class="value" id="heap">--</div></article>
       <article class="card"><div class="label">Uptime</div><div class="value" id="uptime">--</div></article>
-      <article class="card"><div class="label">AP clients</div><div class="value"><span id="clients">--</span><span class="unit">/ 4</span></div></article>
+      <article class="card"><div class="label">AP clients</div><div class="value"><span id="clients">--</span><span class="unit" id="clientsMax">/ 4</span></div></article>
     </section>
 
-    <section class="network-panel">
+    <!-- ================= 板载 LED ================= -->
+    <section class="panel accent-led">
       <div class="panel-head">
-        <div><h2 class="panel-title">无线环境</h2><div class="panel-meta" id="scanMeta">等待遥测数据</div></div>
+        <div>
+          <h2 class="panel-title">板载 LED <small>LEDC PWM</small></h2>
+          <div class="panel-meta" id="ledMeta">等待遥测数据</div>
+        </div>
+        <div class="row" style="align-items:center">
+          <div class="led-preview" id="ledPreview"></div>
+          <div class="seg" id="ledMode">
+            <button data-mode="0">关闭</button>
+            <button data-mode="1">常亮</button>
+            <button data-mode="2">闪烁</button>
+            <button data-mode="3">呼吸</button>
+          </div>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <label class="field" style="flex:1 1 240px">
+            <span>亮度 <i id="brightLabel">100%</i></span>
+            <input type="range" id="brightness" min="0" max="100" value="100">
+          </label>
+          <label class="field" style="flex:1 1 240px">
+            <span>周期 <i id="periodLabel">1000 ms</i></span>
+            <input type="range" id="period" min="100" max="5000" step="100" value="1000">
+          </label>
+          <label class="field" style="min-width:120px">
+            <span>GPIO 引脚</span>
+            <input type="number" id="ledGpio" min="0" max="39" value="2">
+          </label>
+          <label class="field" style="min-width:130px">
+            <span>驱动极性</span>
+            <select id="ledPolarity">
+              <option value="1">高电平点亮</option>
+              <option value="0">低电平点亮</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">
+          多数 ESP32 开发板把板载 LED 接在 <b>GPIO2</b>。若按钮没有反应，先切到
+          <b>低电平点亮</b> 试一次；也可以换引脚逐个排查（GPIO6-11 接 SPI Flash，
+          GPIO34-39 只能做输入，均已被拒绝）。
+        </p>
+      </div>
+    </section>
+
+    <!-- ================= BLE ================= -->
+    <section class="panel accent-ble">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">BLE 无线电 <small>NimBLE</small></h2>
+          <div class="panel-meta" id="bleMeta">尚未采样</div>
+        </div>
+        <div class="row">
+          <button id="bleScanButton" type="button">开始扫描</button>
+          <button id="bleStopButton" class="ghost" type="button" disabled>停止</button>
+          <select id="bleDuration">
+            <option value="3000">3 秒</option>
+            <option value="5000">5 秒</option>
+            <option value="8000" selected>8 秒</option>
+            <option value="15000">15 秒</option>
+          </select>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <span class="pill" id="bleStatePill">状态 --</span>
+          <span class="pill" id="bleAdvPill">广播 --</span>
+          <span class="pill" id="bleSelfPill">本机地址 --</span>
+        </div>
+        <div class="bar"><i id="bleProgress"></i></div>
+
+        <div class="row" style="margin-top:16px">
+          <label class="field" style="flex:1 1 200px">
+            <span>本机广播名称</span>
+            <input type="text" id="advName" maxlength="20" placeholder="ESP32-DASH">
+          </label>
+          <button id="advToggle" type="button" style="align-self:flex-end">开启广播</button>
+        </div>
+        <p class="hint">
+          <b>只有一个开发板时的自检方法</b>：打开上面的「广播」，然后用手机的
+          nRF Connect / 蓝牙调试助手搜索 —— 能搜到 <b>ESP32-DASH</b> 就说明板子的 BLE
+          发射通路正常；再用本页扫描能看到手机/耳机等设备，说明接收通路也正常。
+          两边都通，问题就不在板子上。
+        </p>
+
+        <details class="diag" id="bleDiagBox">
+          <summary>诊断计数器（扫描不到设备时先看这里）</summary>
+          <div class="kv" id="bleDiag"></div>
+        </details>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>设备名称</th><th>地址</th><th>信号</th><th>出现次数</th><th>地址类型</th></tr></thead>
+          <tbody id="bleDevices"><tr><td colspan="5" class="empty">点击「开始扫描」</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= 引脚工具箱 ================= -->
+    <section class="panel accent-pin">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">引脚工具箱 <small>GPIO + ADC1</small></h2>
+          <div class="panel-meta" id="pinMeta">输出电平 / 读取电平 / 测电压</div>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <label class="field" style="min-width:110px">
+            <span>GPIO</span>
+            <input type="number" id="pinGpio" min="0" max="39" value="4">
+          </label>
+          <button id="pinHigh" type="button">输出高</button>
+          <button id="pinLow" type="button">输出低</button>
+          <button id="pinRelease" class="ghost" type="button">释放(高阻)</button>
+          <button id="pinRead" type="button">读取电平</button>
+          <label class="row" style="gap:6px;color:var(--muted);font:11px Consolas,monospace">
+            <input type="checkbox" id="pinPullup"> 启用上拉
+          </label>
+          <span class="pill" id="pinResult">--</span>
+        </div>
+
+        <div class="row" style="margin-top:18px">
+          <label class="field" style="min-width:150px">
+            <span>ADC1 通道</span>
+            <select id="adcChannel">
+              <option value="0">CH0 / GPIO36</option>
+              <option value="1">CH1 / GPIO37</option>
+              <option value="2">CH2 / GPIO38</option>
+              <option value="3">CH3 / GPIO39</option>
+              <option value="4">CH4 / GPIO32</option>
+              <option value="5">CH5 / GPIO33</option>
+              <option value="6">CH6 / GPIO34</option>
+              <option value="7">CH7 / GPIO35</option>
+            </select>
+          </label>
+          <button id="adcToggle" type="button">开始采样</button>
+          <div style="flex:1 1 180px">
+            <div class="adc-value" id="adcValue">-- V</div>
+            <div class="panel-meta" id="adcMeta">未采样</div>
+          </div>
+        </div>
+        <canvas class="spark" id="adcSpark" width="1000" height="150" style="margin-top:12px"></canvas>
+        <p class="hint">
+          ADC2 与 Wi-Fi 冲突，因此只开放 ADC1。GPIO34-39 只能输入、没有内部上拉，
+          悬空时读数会漂移属于正常现象。
+        </p>
+      </div>
+    </section>
+
+    <!-- ================= STA 联网 ================= -->
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">STA 联网 <small>接入路由器</small></h2>
+          <div class="panel-meta" id="staMeta">未配置</div>
+        </div>
+        <button id="staDisconnect" class="ghost" type="button">断开</button>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <label class="field" style="flex:1 1 200px">
+            <span>SSID</span>
+            <input type="text" id="staSsid" list="staSsidList" placeholder="选择或输入 Wi-Fi 名称">
+            <datalist id="staSsidList"></datalist>
+          </label>
+          <label class="field" style="flex:1 1 180px">
+            <span>密码</span>
+            <input type="password" id="staPassword" placeholder="开放网络留空">
+          </label>
+          <button id="staConnect" type="button" style="align-self:flex-end">连接</button>
+        </div>
+        <p class="hint">
+          注意：APSTA 模式下 AP 信道会跟随 STA 信道，切换路由器后已连接的客户端可能掉线一次。
+        </p>
+      </div>
+    </section>
+
+    <!-- ================= 无线环境 ================= -->
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2 class="panel-title">无线环境 <small>Wi-Fi 扫描</small></h2><div class="panel-meta" id="scanMeta">等待遥测数据</div></div>
         <button id="scanButton" type="button">重新扫描</button>
       </div>
       <div class="table-wrap">
@@ -163,100 +401,518 @@
       </div>
     </section>
 
-    <section class="network-panel ble-panel">
+    <!-- ================= 设备信息 ================= -->
+    <section class="panel">
       <div class="panel-head">
-        <div><h2 class="panel-title">BLE 无线电频谱</h2><div class="panel-meta" id="bleMeta">按需扫描 · 尚未采样</div></div>
-        <button id="bleScanButton" type="button">扫描蓝牙</button>
+        <div><h2 class="panel-title">设备信息</h2><div class="panel-meta" id="deviceMeta">--</div></div>
+        <div class="row">
+          <button id="rebootButton" class="danger" type="button">重启</button>
+          <button id="factoryButton" class="danger" type="button">恢复出厂设置</button>
+        </div>
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>设备名称</th><th>地址</th><th>信号</th><th>地址类型</th></tr></thead>
-          <tbody id="bleDevices"><tr><td colspan="4" class="empty">点击“扫描蓝牙”开始 5 秒采样</td></tr></tbody>
-        </table>
-      </div>
+      <div class="panel-body"><div class="kv" id="deviceInfo"></div></div>
     </section>
+
+    <!-- ================= 日志 ================= -->
+    <section class="panel">
+      <div class="panel-head">
+        <div><h2 class="panel-title">系统日志 <small>RAM 环形缓冲</small></h2><div class="panel-meta" id="logMeta">暂停</div></div>
+        <div class="row">
+          <button id="logToggle" type="button">开始跟随</button>
+          <button id="logClear" class="ghost" type="button">清屏</button>
+        </div>
+      </div>
+      <div class="panel-body"><pre class="log-view" id="logView">点击「开始跟随」读取设备日志。</pre></div>
+    </section>
+
     <footer><span>ESP32-MANAGER / OFFLINE</span><span id="updated">LAST SYNC --</span></footer>
   </main>
 
   <script>
-    const byId = id => document.getElementById(id);
-    const formatBytes = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)}<span class="unit">MB</span>` : `${Math.round(bytes / 1024)}<span class="unit">KB</span>`;
+    const $ = id => document.getElementById(id);
+    const byId = $;
+
+    const formatBytes = bytes => bytes >= 1048576
+      ? `${(bytes / 1048576).toFixed(2)}<span class="unit">MB</span>`
+      : `${Math.round(bytes / 1024)}<span class="unit">KB</span>`;
     const formatUptime = total => {
-      const d = Math.floor(total / 86400), h = Math.floor(total % 86400 / 3600), m = Math.floor(total % 3600 / 60), s = total % 60;
+      const d = Math.floor(total / 86400), h = Math.floor(total % 86400 / 3600),
+            m = Math.floor(total % 3600 / 60), s = total % 60;
       return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m ${s}s`;
     };
     const signalLevel = rssi => rssi >= -50 ? 4 : rssi >= -65 ? 3 : rssi >= -75 ? 2 : 1;
     const signalBars = rssi => {
       const el = document.createElement('span'); el.className = 'signal';
       const level = signalLevel(rssi);
-      for (let i = 1; i <= 4; i++) { const bar = document.createElement('i'); if (i <= level) bar.className = 'on'; el.appendChild(bar); }
+      for (let i = 1; i <= 4; i++) {
+        const bar = document.createElement('i');
+        if (i <= level) bar.className = 'on';
+        el.appendChild(bar);
+      }
       return el;
     };
-    function cell(text, className = '') { const td = document.createElement('td'); td.textContent = text; td.className = className; return td; }
-    function render(data) {
-      byId('chip').textContent = `${data.chip.toUpperCase()} · ${data.cores}C`;
-      byId('flash').innerHTML = formatBytes(data.flash_bytes);
-      byId('heap').innerHTML = formatBytes(data.free_heap);
-      byId('uptime').textContent = formatUptime(data.uptime_seconds);
-      byId('clients').textContent = data.clients;
-      byId('scanMeta').textContent = `${data.networks.length} / ${data.total_networks} 个网络 · 扫描序号 ${data.scan_id}`;
-      const body = byId('networks'); body.replaceChildren();
-      if (!data.networks.length) {
-        const row = document.createElement('tr'); const td = cell('未发现网络', 'empty'); td.colSpan = 5; row.appendChild(td); body.appendChild(row);
+    function cell(text, className = '') {
+      const td = document.createElement('td');
+      td.textContent = text;
+      td.className = className;
+      return td;
+    }
+    function emptyRow(tbody, text, columns) {
+      const row = document.createElement('tr');
+      const td = cell(text, 'empty');
+      td.colSpan = columns;
+      row.appendChild(td);
+      tbody.appendChild(row);
+    }
+
+    async function fetchJson(path, options) {
+      const response = await fetch(path, Object.assign({ cache: 'no-store' }, options));
+      let payload = null;
+      try { payload = await response.json(); } catch (error) { payload = null; }
+      if (!response.ok) {
+        const message = payload && payload.error ? payload.error : `HTTP ${response.status}`;
+        throw new Error(message);
       }
+      return payload;
+    }
+    const postJson = (path, body) => fetchJson(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+
+    /* ---------------- 状态轮询 ---------------- */
+    let status = null;
+    let ledEditing = false;
+
+    function renderStatus(data) {
+      status = data;
+      const d = data.device, ap = data.ap, sta = data.sta;
+
+      $('chip').textContent = `${d.chip.toUpperCase()} · ${d.cores}C`;
+      $('flash').innerHTML = formatBytes(d.flash_bytes);
+      $('heap').innerHTML = formatBytes(d.free_heap);
+      $('uptime').textContent = formatUptime(d.uptime_seconds);
+      $('clients').textContent = ap.clients;
+      $('clientsMax').textContent = `/ ${ap.max_clients}`;
+
+      renderLed(data.led);
+      renderBleSummary(data.ble);
+      renderSta(sta);
+      renderNetworks(data);
+      renderDevice(d, data);
+
+      $('linkState').textContent = 'LINK ACTIVE';
+      $('linkState').className = '';
+      $('updated').textContent = `LAST SYNC ${new Date().toLocaleTimeString()}`;
+    }
+
+    function renderLed(led) {
+      $('ledMeta').textContent =
+        `GPIO${led.gpio} · 模式 ${['关闭', '常亮', '闪烁', '呼吸'][led.mode]} · ` +
+        `亮度 ${led.brightness}% · 周期 ${led.period_ms} ms · ` +
+        (led.active_high ? '高电平点亮' : '低电平点亮');
+      $('ledPreview').style.setProperty('--ledColor', led.mode === 0 ? '#3a4a46' : '#ffc857');
+      $('ledPreview').style.setProperty('--ledOpacity', led.mode === 0 ? '.25' : '1');
+
+      if (ledEditing) return;
+      $('brightness').value = led.brightness;
+      $('period').value = led.period_ms;
+      $('ledGpio').value = led.gpio;
+      $('ledPolarity').value = led.active_high ? '1' : '0';
+      $('brightLabel').textContent = `${led.brightness}%`;
+      $('periodLabel').textContent = `${led.period_ms} ms`;
+      [...$('ledMode').children].forEach(button => {
+        button.classList.toggle('active', Number(button.dataset.mode) === led.mode);
+      });
+    }
+
+    function renderBleSummary(ble) {
+      $('bleAdvPill').textContent = ble.advertising ? `广播中 · ${ble.adv_name}` : '广播关闭';
+      $('bleAdvPill').className = `pill ${ble.advertising ? 'ok' : ''}`;
+      $('bleSelfPill').textContent = ble.host_ready ? 'BLE 主机就绪' : 'BLE 主机未就绪';
+      $('bleSelfPill').className = `pill ${ble.host_ready ? 'ok' : 'error'}`;
+      $('advToggle').textContent = ble.advertising ? '停止广播' : '开启广播';
+      if (document.activeElement !== $('advName')) {
+        $('advName').value = ble.adv_name || '';
+      }
+    }
+
+    function renderSta(sta) {
+      $('staMeta').textContent = sta.connected
+        ? `已连接 ${sta.ssid} · IP ${sta.ip} · 网关 ${sta.gateway} · ${sta.rssi} dBm`
+        : sta.configured ? `正在连接 ${sta.ssid}...` : '未配置';
+    }
+
+    function renderNetworks(data) {
+      $('scanMeta').textContent =
+        `${data.networks.length} / ${data.total_networks} 个网络 · 扫描序号 ${data.scan_id}`;
+      const body = $('networks');
+      body.replaceChildren();
+      if (!data.networks.length) { emptyRow(body, '未发现网络', 5); return; }
+      const list = $('staSsidList');
+      list.replaceChildren();
       data.networks.forEach(net => {
         const row = document.createElement('tr');
         row.appendChild(cell(net.ssid || '<hidden>'));
-        const rssi = cell(`${net.rssi} dBm`); rssi.prepend(signalBars(net.rssi)); row.appendChild(rssi);
-        row.appendChild(cell(net.channel)); row.appendChild(cell(net.security, 'security')); row.appendChild(cell(net.bssid));
+        const rssi = cell(`${net.rssi} dBm`, 'num');
+        rssi.prepend(signalBars(net.rssi));
+        row.appendChild(rssi);
+        row.appendChild(cell(net.channel, 'num'));
+        row.appendChild(cell(net.security, 'security'));
+        row.appendChild(cell(net.bssid, 'mono'));
         body.appendChild(row);
+
+        if (net.ssid && net.ssid !== '<hidden>') {
+          const option = document.createElement('option');
+          option.value = net.ssid;
+          list.appendChild(option);
+        }
       });
-      byId('linkState').textContent = 'LINK ACTIVE'; byId('linkState').className = '';
-      byId('updated').textContent = `LAST SYNC ${new Date().toLocaleTimeString()}`;
     }
-    function renderBle(data) {
-      byId('bleMeta').textContent = `${data.ble_count} 个广播设备 · 扫描序号 ${data.ble_scan_id}`;
-      const body = byId('bleDevices'); body.replaceChildren();
+
+    function renderDevice(d, data) {
+      $('deviceMeta').textContent = `${d.idf_version} · 复位原因 ${d.reset_reason}`;
+      const rows = [
+        ['芯片型号', d.chip],
+        ['核心数', `${d.cores}`],
+        ['芯片版本', `rev ${d.revision}`],
+        ['Flash', `${Math.round(d.flash_bytes / 1024)} KB`],
+        ['可用堆', `${Math.round(d.free_heap / 1024)} KB`],
+        ['最小可用堆', `${Math.round(d.min_free_heap / 1024)} KB`],
+        ['IDF 版本', d.idf_version],
+        ['复位原因', d.reset_reason],
+        ['STA MAC', d.mac_sta || '--'],
+        ['AP MAC', d.mac_ap || '--'],
+        ['BT MAC', d.mac_bt || '--'],
+        ['AP 信道', `${data.ap.channel ?? '--'}`],
+        ['日志行数', `${data.log_lines}`],
+      ];
+      const box = $('deviceInfo');
+      box.replaceChildren();
+      rows.forEach(([key, value]) => {
+        const item = document.createElement('div');
+        const b = document.createElement('b'); b.textContent = key;
+        const i = document.createElement('i'); i.textContent = value;
+        item.append(b, i);
+        box.appendChild(item);
+      });
+    }
+
+    async function refresh() {
+      try { renderStatus(await fetchJson('/api/status')); }
+      catch (error) {
+        $('linkState').textContent = 'LINK LOST';
+        $('linkState').className = 'error';
+      }
+    }
+
+    /* ---------------- LED ---------------- */
+    let ledSaveTimer = null;
+    function currentLedPayload() {
+      const active = [...$('ledMode').children].find(button => button.classList.contains('active'));
+      return {
+        gpio: Number($('ledGpio').value),
+        mode: active ? Number(active.dataset.mode) : 0,
+        brightness: Number($('brightness').value),
+        period_ms: Number($('period').value),
+        active_high: $('ledPolarity').value === '1',
+      };
+    }
+    async function pushLed(immediate) {
+      ledEditing = true;
+      clearTimeout(ledSaveTimer);
+      const send = async () => {
+        try { await postJson('/api/led', currentLedPayload()); }
+        catch (error) { $('ledMeta').textContent = `LED 设置失败：${error.message}`; }
+        finally { setTimeout(() => { ledEditing = false; }, 400); }
+      };
+      if (immediate) await send();
+      else ledSaveTimer = setTimeout(send, 180);
+    }
+    $('ledMode').addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      [...$('ledMode').children].forEach(item => item.classList.remove('active'));
+      button.classList.add('active');
+      pushLed(true);
+    });
+    $('brightness').addEventListener('input', event => {
+      $('brightLabel').textContent = `${event.target.value}%`;
+      pushLed(false);
+    });
+    $('period').addEventListener('input', event => {
+      $('periodLabel').textContent = `${event.target.value} ms`;
+      pushLed(false);
+    });
+    $('ledGpio').addEventListener('change', () => pushLed(true));
+    $('ledPolarity').addEventListener('change', () => pushLed(true));
+
+    /* ---------------- BLE ---------------- */
+    let bleTimer = null;
+    let bleScanning = false;
+
+    function bleStateLabel(state) {
+      return { idle: '空闲', running: '扫描中', done: '已完成', error: '出错' }[state] || state;
+    }
+
+    function renderBleDevices(data) {
+      const body = $('bleDevices');
+      body.replaceChildren();
       if (!data.ble_devices.length) {
-        const row = document.createElement('tr'); const td = cell('未发现正在广播的 BLE 设备', 'empty'); td.colSpan = 4; row.appendChild(td); body.appendChild(row);
+        emptyRow(body, data.scan_state === 'running' ? '正在监听广播...' : '未发现正在广播的 BLE 设备', 5);
+        return;
       }
       data.ble_devices.forEach(device => {
         const row = document.createElement('tr');
         row.appendChild(cell(device.name || 'Unknown'));
-        row.appendChild(cell(device.address));
-        const rssi = cell(`${device.rssi} dBm`); rssi.prepend(signalBars(device.rssi)); row.appendChild(rssi);
+        row.appendChild(cell(device.address, 'mono'));
+        const rssi = cell(`${device.rssi} dBm`, 'num');
+        rssi.prepend(signalBars(device.rssi));
+        row.appendChild(rssi);
+        row.appendChild(cell(device.seen, 'num'));
         row.appendChild(cell(device.address_type, 'security'));
         body.appendChild(row);
       });
     }
-    async function fetchJson(path) {
-      const response = await fetch(path, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.json();
+
+    function renderBleDiag(data) {
+      const diag = data.diag;
+      const rows = [
+        ['NimBLE 主机就绪', diag.host_ready ? '是' : '否'],
+        ['控制器状态', `${diag.controller_status} (${diag.controller_ok ? 'ENABLED' : '未启用'})`],
+        ['地址配置 rc', `${diag.last_sync_rc}`],
+        ['上次扫描 rc', `${diag.last_scan_rc}`],
+        ['上次广播 rc', `${diag.last_adv_rc}`],
+        ['主机复位次数', `${diag.host_resets}`],
+        ['累计广播报文', `${diag.adv_reports}`],
+        ['本次扫描报文', `${diag.adv_reports_scan}`],
+        ['扫描启动次数', `${diag.scan_runs}`],
+        ['扫描超时次数', `${diag.scan_timeouts}`],
+        ['广播启动次数', `${diag.adv_starts}`],
+        ['本机地址', diag.own_address ? `${diag.own_address} (${diag.own_address_type})` : '未知'],
+      ];
+      const box = $('bleDiag');
+      box.replaceChildren();
+      rows.forEach(([key, value]) => {
+        const item = document.createElement('div');
+        const b = document.createElement('b'); b.textContent = key;
+        const i = document.createElement('i'); i.textContent = value;
+        item.append(b, i);
+        box.appendChild(item);
+      });
     }
-    async function load(path = '/api/status') {
-      render(await fetchJson(path));
+
+    function renderBleStatus(data) {
+      $('bleMeta').textContent =
+        `${data.ble_count} 个广播设备 · 扫描序号 ${data.ble_scan_id} · 原始报文 ${data.diag.adv_reports_scan}`;
+      $('bleStatePill').textContent = `状态 ${bleStateLabel(data.scan_state)}`;
+      $('bleStatePill').className = 'pill ' +
+        (data.scan_state === 'error' ? 'error' : data.scan_state === 'done' ? 'ok' : '');
+      renderBleDevices(data);
+      renderBleDiag(data);
+
+      const total = data.diag.scan_duration_ms || 1;
+      const elapsed = Math.min(data.diag.scan_elapsed_ms || 0, total);
+      $('bleProgress').style.width = `${Math.round(elapsed / total * 100)}%`;
+
+      if (data.scan_state !== 'running') {
+        bleScanning = false;
+        clearInterval(bleTimer);
+        bleTimer = null;
+        $('bleScanButton').disabled = false;
+        $('bleScanButton').textContent = '开始扫描';
+        $('bleStopButton').disabled = true;
+        if (data.scan_state === 'error') {
+          const rc = data.diag.last_scan_rc;
+          const hint = rc === 30 ? '（BLE 主机未就绪）' : rc === 13 ? '（扫描超时，控制器没回事件）' : '';
+          $('bleMeta').textContent += ` · 失败 rc=${rc}${hint}`;
+        }
+      }
     }
-    let bleScanning = false;
-    async function refresh() {
-      if (bleScanning) return;
-      try { await load(); }
-      catch (error) { byId('linkState').textContent = 'LINK LOST'; byId('linkState').className = 'error'; }
+
+    async function pollBle() {
+      try { renderBleStatus(await fetchJson('/api/ble/status')); }
+      catch (error) { $('bleMeta').textContent = `BLE 状态读取失败：${error.message}`; }
     }
-    byId('scanButton').addEventListener('click', async event => {
-      const button = event.currentTarget; button.disabled = true; button.textContent = '扫描中...';
-      try { await load('/api/scan'); }
-      catch (error) { byId('scanMeta').textContent = `扫描失败：${error.message}`; }
+
+    $('bleScanButton').addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true; button.textContent = '启动中...';
+      $('bleProgress').style.width = '0%';
+      try {
+        await postJson('/api/ble/scan/start', { duration_ms: Number($('bleDuration').value) });
+        bleScanning = true;
+        button.textContent = '扫描中...';
+        $('bleStopButton').disabled = false;
+        await pollBle();
+        clearInterval(bleTimer);
+        bleTimer = setInterval(pollBle, 700);
+      } catch (error) {
+        $('bleMeta').textContent = `无法启动扫描：${error.message}`;
+        button.disabled = false; button.textContent = '开始扫描';
+      }
+    });
+    $('bleStopButton').addEventListener('click', async () => {
+      try { await postJson('/api/ble/scan/stop'); } catch (error) { /* ignore */ }
+      await pollBle();
+    });
+    $('advToggle').addEventListener('click', async event => {
+      const button = event.currentTarget;
+      const enable = !(status && status.ble.advertising);
+      button.disabled = true;
+      try {
+        await postJson('/api/ble/adv', { enabled: enable, name: $('advName').value.trim() });
+        await refresh();
+      } catch (error) {
+        $('bleMeta').textContent = `广播切换失败：${error.message}`;
+      } finally { button.disabled = false; }
+    });
+
+    /* ---------------- 引脚 ---------------- */
+    async function pinAction(action, level) {
+      try {
+        const result = await postJson('/api/gpio', {
+          gpio: Number($('pinGpio').value),
+          action,
+          level,
+          pullup: $('pinPullup').checked,
+        });
+        $('pinResult').textContent = `GPIO${result.gpio} ${action} = ${result.level}`;
+        $('pinResult').className = 'pill ok';
+      } catch (error) {
+        $('pinResult').textContent = error.message;
+        $('pinResult').className = 'pill error';
+      }
+    }
+    $('pinHigh').addEventListener('click', () => pinAction('out', 1));
+    $('pinLow').addEventListener('click', () => pinAction('out', 0));
+    $('pinRelease').addEventListener('click', () => pinAction('release'));
+    $('pinRead').addEventListener('click', () => pinAction('read'));
+
+    /* ---------------- ADC ---------------- */
+    const sparkData = [];
+    let adcTimer = null;
+    function drawSpark() {
+      const canvas = $('adcSpark');
+      const context = canvas.getContext('2d');
+      const { width, height } = canvas;
+      context.clearRect(0, 0, width, height);
+      context.strokeStyle = 'rgba(183,155,255,.14)';
+      context.lineWidth = 1;
+      for (let i = 1; i < 4; i++) {
+        const y = height * i / 4;
+        context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke();
+      }
+      if (sparkData.length < 2) return;
+      context.strokeStyle = '#b79bff';
+      context.lineWidth = 2;
+      context.beginPath();
+      sparkData.forEach((value, index) => {
+        const x = index / (sparkData.length - 1) * width;
+        const y = height - Math.min(value / 3.3, 1) * height;
+        if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+      });
+      context.stroke();
+    }
+    async function sampleAdc() {
+      try {
+        const data = await fetchJson(`/api/adc?channel=${$('adcChannel').value}`);
+        $('adcValue').textContent = `${data.volts.toFixed(3)} V`;
+        $('adcMeta').textContent = `CH${data.channel} / GPIO${data.gpio} · 原始值 ${data.raw} · ${data.millivolts} mV`;
+        sparkData.push(data.volts);
+        if (sparkData.length > 120) sparkData.shift();
+        drawSpark();
+      } catch (error) {
+        $('adcMeta').textContent = `采样失败：${error.message}`;
+      }
+    }
+    $('adcToggle').addEventListener('click', event => {
+      const button = event.currentTarget;
+      if (adcTimer) {
+        clearInterval(adcTimer); adcTimer = null;
+        button.textContent = '开始采样'; button.classList.remove('active');
+      } else {
+        adcTimer = setInterval(sampleAdc, 600);
+        sampleAdc();
+        button.textContent = '停止采样'; button.classList.add('active');
+      }
+    });
+    $('adcChannel').addEventListener('change', () => { sparkData.length = 0; drawSpark(); });
+
+    /* ---------------- 联网 ---------------- */
+    $('staConnect').addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        await postJson('/api/wifi', {
+          action: 'connect',
+          ssid: $('staSsid').value.trim(),
+          password: $('staPassword').value,
+        });
+        $('staMeta').textContent = '连接请求已下发，等待获取 IP...';
+      } catch (error) {
+        $('staMeta').textContent = `连接失败：${error.message}`;
+      } finally { button.disabled = false; }
+    });
+    $('staDisconnect').addEventListener('click', async () => {
+      try { await postJson('/api/wifi', { action: 'disconnect' }); }
+      catch (error) { $('staMeta').textContent = `断开失败：${error.message}`; }
+    });
+
+    /* ---------------- Wi-Fi 扫描 ---------------- */
+    $('scanButton').addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true; button.textContent = '扫描中...';
+      try { renderStatus(await fetchJson('/api/scan')); }
+      catch (error) { $('scanMeta').textContent = `扫描失败：${error.message}`; }
       finally { button.disabled = false; button.textContent = '重新扫描'; }
     });
-    byId('bleScanButton').addEventListener('click', async event => {
-      const button = event.currentTarget; bleScanning = true; button.disabled = true; button.textContent = '采样 5 秒...';
-      byId('bleMeta').textContent = '正在监听 BLE 广播，请稍候...';
-      try { renderBle(await fetchJson('/api/ble/scan')); }
-      catch (error) { byId('bleMeta').textContent = `蓝牙扫描失败：${error.message}`; }
-      finally { bleScanning = false; button.disabled = false; button.textContent = '扫描蓝牙'; refresh(); }
+
+    /* ---------------- 系统 ---------------- */
+    $('rebootButton').addEventListener('click', async () => {
+      if (!confirm('确定重启设备？')) return;
+      try { await postJson('/api/system', { action: 'reboot' }); } catch (error) { /* device restarts */ }
+      $('linkState').textContent = 'REBOOTING'; $('linkState').className = 'warn';
     });
-    refresh(); setInterval(refresh, 2000);
+    $('factoryButton').addEventListener('click', async () => {
+      if (!confirm('恢复出厂设置会清空 NVS（LED 设置、广播名等），确定继续？')) return;
+      try { await postJson('/api/system', { action: 'factory_reset' }); } catch (error) { /* device restarts */ }
+      $('linkState').textContent = 'FACTORY RESET'; $('linkState').className = 'warn';
+    });
+
+    /* ---------------- 日志 ---------------- */
+    let logTimer = null;
+    async function pullLogs() {
+      try {
+        const data = await fetchJson('/api/logs');
+        const view = $('logView');
+        const atBottom = view.scrollTop + view.clientHeight >= view.scrollHeight - 24;
+        view.textContent = data.text || '(空)';
+        if (atBottom) view.scrollTop = view.scrollHeight;
+        $('logMeta').textContent = `共 ${data.total_lines} 行 · ${new Date().toLocaleTimeString()} 更新`;
+      } catch (error) {
+        $('logMeta').textContent = `日志读取失败：${error.message}`;
+      }
+    }
+    $('logToggle').addEventListener('click', event => {
+      const button = event.currentTarget;
+      if (logTimer) {
+        clearInterval(logTimer); logTimer = null;
+        button.textContent = '开始跟随'; button.classList.remove('active');
+        $('logMeta').textContent = '暂停';
+      } else {
+        logTimer = setInterval(pullLogs, 2500);
+        pullLogs();
+        button.textContent = '暂停跟随'; button.classList.add('active');
+      }
+    });
+    $('logClear').addEventListener('click', () => { $('logView').textContent = '(本地清屏)'; });
+
+    /* ---------------- 启动 ---------------- */
+    refresh();
+    setInterval(refresh, 2500);
+    drawSpark();
   </script>
 </body>
 </html>
