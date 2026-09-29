@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#07100f">
+  <title>ESP32 // DEVICE CORE</title>
+  <style>
+    :root {
+      --ink: #dffcf3;
+      --muted: #77978e;
+      --panel: rgba(11, 27, 25, .78);
+      --line: rgba(116, 255, 215, .16);
+      --green: #65ffd0;
+      --amber: #ffc857;
+      --danger: #ff6b7a;
+      --bg: #050a0a;
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 78% 8%, rgba(35, 156, 127, .13), transparent 31rem),
+        linear-gradient(rgba(101,255,208,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(101,255,208,.035) 1px, transparent 1px),
+        var(--bg);
+      background-size: auto, 32px 32px, 32px 32px, auto;
+      font-family: Bahnschrift, "Aptos Narrow", "Segoe UI", sans-serif;
+      letter-spacing: .015em;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(255,255,255,.013) 3px 4px);
+      mix-blend-mode: screen;
+    }
+    main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 38px 0 54px; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 24px;
+      margin-bottom: 30px;
+      animation: rise .65s ease both;
+    }
+    .eyebrow, .mono, th, button { font-family: Consolas, "Lucida Console", monospace; }
+    .eyebrow { color: var(--green); font-size: 11px; letter-spacing: .22em; text-transform: uppercase; }
+    h1 { margin: 9px 0 5px; font-size: clamp(34px, 7vw, 76px); line-height: .92; letter-spacing: -.055em; font-weight: 700; }
+    h1 span { color: transparent; -webkit-text-stroke: 1px rgba(223,252,243,.52); }
+    .sub { margin: 0; color: var(--muted); font-size: 14px; }
+    .live {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding-top: 8px;
+      color: var(--green);
+      font: 12px Consolas, monospace;
+      white-space: nowrap;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 14px var(--green); animation: pulse 1.7s infinite; }
+    .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 18px; }
+    .card, .network-panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: inset 0 1px rgba(255,255,255,.035), 0 24px 60px rgba(0,0,0,.22);
+      backdrop-filter: blur(10px);
+    }
+    .card { min-height: 132px; padding: 18px; position: relative; overflow: hidden; animation: rise .55s ease both; }
+    .card::after { content: ""; position: absolute; left: 0; bottom: 0; width: 42%; height: 2px; background: var(--green); box-shadow: 0 0 12px var(--green); }
+    .card:nth-child(2) { animation-delay: .05s; }
+    .card:nth-child(3) { animation-delay: .1s; }
+    .card:nth-child(4) { animation-delay: .15s; }
+    .card:nth-child(5) { animation-delay: .2s; }
+    .label { color: var(--muted); font: 10px Consolas, monospace; letter-spacing: .16em; text-transform: uppercase; }
+    .value { margin-top: 27px; font-size: clamp(23px, 3vw, 34px); line-height: 1; font-weight: 650; letter-spacing: -.035em; overflow-wrap: anywhere; }
+    .unit { color: var(--green); font: 11px Consolas, monospace; margin-left: 5px; }
+    .network-panel { animation: rise .6s .18s ease both; }
+    .ble-panel {
+      --green: #72dcff;
+      --line: rgba(114, 220, 255, .18);
+      margin-top: 18px;
+      animation-delay: .25s;
+    }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 20px 22px; border-bottom: 1px solid var(--line); }
+    .panel-title { margin: 0; font-size: 18px; letter-spacing: -.01em; }
+    .panel-meta { color: var(--muted); font: 11px Consolas, monospace; margin-top: 5px; }
+    button {
+      border: 1px solid rgba(101,255,208,.42);
+      color: var(--green);
+      background: rgba(101,255,208,.07);
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 11px;
+      letter-spacing: .08em;
+      transition: .18s ease;
+    }
+    button:hover { background: var(--green); color: #04100d; box-shadow: 0 0 24px rgba(101,255,208,.25); }
+    button:disabled { cursor: wait; opacity: .5; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { color: var(--muted); font-size: 10px; letter-spacing: .13em; text-align: left; font-weight: 400; }
+    th, td { padding: 13px 22px; border-bottom: 1px solid rgba(116,255,215,.075); }
+    tbody tr { transition: background .16s ease; }
+    tbody tr:hover { background: rgba(101,255,208,.045); }
+    td:nth-child(1), td:nth-child(3), td:nth-child(4) { font-family: Consolas, monospace; }
+    .signal { display: inline-flex; gap: 2px; align-items: end; margin-right: 8px; height: 12px; }
+    .signal i { display: block; width: 3px; background: rgba(101,255,208,.16); }
+    .signal i:nth-child(1) { height: 3px; } .signal i:nth-child(2) { height: 6px; }
+    .signal i:nth-child(3) { height: 9px; } .signal i:nth-child(4) { height: 12px; }
+    .signal i.on { background: var(--green); box-shadow: 0 0 5px rgba(101,255,208,.4); }
+    .security { color: var(--amber); font-size: 11px; }
+    .empty { padding: 35px 22px; color: var(--muted); text-align: center; font-family: Consolas, monospace; }
+    footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 13px; color: #547068; font: 10px Consolas, monospace; }
+    .error { color: var(--danger); }
+    @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+    @keyframes pulse { 50% { opacity: .38; box-shadow: 0 0 4px var(--green); } }
+    @media (max-width: 850px) { .cards { grid-template-columns: repeat(2, 1fr); } .card:last-child { grid-column: span 2; } }
+    @media (max-width: 560px) {
+      main { width: min(100% - 20px, 1120px); padding-top: 24px; }
+      header { display: block; } .live { margin-top: 18px; }
+      .cards { grid-template-columns: 1fr 1fr; }
+      .card { min-height: 112px; padding: 14px; }
+      .value { margin-top: 21px; }
+      .panel-head, th, td { padding-left: 14px; padding-right: 14px; }
+      th:nth-child(5), td:nth-child(5) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <div class="eyebrow">Local telemetry interface // 192.168.4.1</div>
+        <h1>DEVICE <span>CORE</span></h1>
+        <p class="sub">Goouuu ESP-32F · isolated control plane</p>
+      </div>
+      <div class="live"><span class="dot"></span><span id="linkState">LINK ACTIVE</span></div>
+    </header>
+
+    <section class="cards" aria-label="设备状态">
+      <article class="card"><div class="label">Processor</div><div class="value" id="chip">--</div></article>
+      <article class="card"><div class="label">Flash storage</div><div class="value" id="flash">--</div></article>
+      <article class="card"><div class="label">Free heap</div><div class="value" id="heap">--</div></article>
+      <article class="card"><div class="label">Uptime</div><div class="value" id="uptime">--</div></article>
+      <article class="card"><div class="label">AP clients</div><div class="value"><span id="clients">--</span><span class="unit">/ 4</span></div></article>
+    </section>
+
+    <section class="network-panel">
+      <div class="panel-head">
+        <div><h2 class="panel-title">无线环境</h2><div class="panel-meta" id="scanMeta">等待遥测数据</div></div>
+        <button id="scanButton" type="button">重新扫描</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>SSID</th><th>信号</th><th>信道</th><th>安全</th><th>BSSID</th></tr></thead>
+          <tbody id="networks"><tr><td colspan="5" class="empty">正在读取...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="network-panel ble-panel">
+      <div class="panel-head">
+        <div><h2 class="panel-title">BLE 无线电频谱</h2><div class="panel-meta" id="bleMeta">按需扫描 · 尚未采样</div></div>
+        <button id="bleScanButton" type="button">扫描蓝牙</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>设备名称</th><th>地址</th><th>信号</th><th>地址类型</th></tr></thead>
+          <tbody id="bleDevices"><tr><td colspan="4" class="empty">点击“扫描蓝牙”开始 5 秒采样</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    <footer><span>ESP32-MANAGER / OFFLINE</span><span id="updated">LAST SYNC --</span></footer>
+  </main>
+
+  <script>
+    const byId = id => document.getElementById(id);
+    const formatBytes = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)}<span class="unit">MB</span>` : `${Math.round(bytes / 1024)}<span class="unit">KB</span>`;
+    const formatUptime = total => {
+      const d = Math.floor(total / 86400), h = Math.floor(total % 86400 / 3600), m = Math.floor(total % 3600 / 60), s = total % 60;
+      return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m ${s}s`;
+    };
+    const signalLevel = rssi => rssi >= -50 ? 4 : rssi >= -65 ? 3 : rssi >= -75 ? 2 : 1;
+    const signalBars = rssi => {
+      const el = document.createElement('span'); el.className = 'signal';
+      const level = signalLevel(rssi);
+      for (let i = 1; i <= 4; i++) { const bar = document.createElement('i'); if (i <= level) bar.className = 'on'; el.appendChild(bar); }
+      return el;
+    };
+    function cell(text, className = '') { const td = document.createElement('td'); td.textContent = text; td.className = className; return td; }
+    function render(data) {
+      byId('chip').textContent = `${data.chip.toUpperCase()} · ${data.cores}C`;
+      byId('flash').innerHTML = formatBytes(data.flash_bytes);
+      byId('heap').innerHTML = formatBytes(data.free_heap);
+      byId('uptime').textContent = formatUptime(data.uptime_seconds);
+      byId('clients').textContent = data.clients;
+      byId('scanMeta').textContent = `${data.networks.length} / ${data.total_networks} 个网络 · 扫描序号 ${data.scan_id}`;
+      const body = byId('networks'); body.replaceChildren();
+      if (!data.networks.length) {
+        const row = document.createElement('tr'); const td = cell('未发现网络', 'empty'); td.colSpan = 5; row.appendChild(td); body.appendChild(row);
+      }
+      data.networks.forEach(net => {
+        const row = document.createElement('tr');
+        row.appendChild(cell(net.ssid || '<hidden>'));
+        const rssi = cell(`${net.rssi} dBm`); rssi.prepend(signalBars(net.rssi)); row.appendChild(rssi);
+        row.appendChild(cell(net.channel)); row.appendChild(cell(net.security, 'security')); row.appendChild(cell(net.bssid));
+        body.appendChild(row);
+      });
+      byId('linkState').textContent = 'LINK ACTIVE'; byId('linkState').className = '';
+      byId('updated').textContent = `LAST SYNC ${new Date().toLocaleTimeString()}`;
+    }
+    function renderBle(data) {
+      byId('bleMeta').textContent = `${data.ble_count} 个广播设备 · 扫描序号 ${data.ble_scan_id}`;
+      const body = byId('bleDevices'); body.replaceChildren();
+      if (!data.ble_devices.length) {
+        const row = document.createElement('tr'); const td = cell('未发现正在广播的 BLE 设备', 'empty'); td.colSpan = 4; row.appendChild(td); body.appendChild(row);
+      }
+      data.ble_devices.forEach(device => {
+        const row = document.createElement('tr');
+        row.appendChild(cell(device.name || 'Unknown'));
+        row.appendChild(cell(device.address));
+        const rssi = cell(`${device.rssi} dBm`); rssi.prepend(signalBars(device.rssi)); row.appendChild(rssi);
+        row.appendChild(cell(device.address_type, 'security'));
+        body.appendChild(row);
+      });
+    }
+    async function fetchJson(path) {
+      const response = await fetch(path, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    }
+    async function load(path = '/api/status') {
+      render(await fetchJson(path));
+    }
+    let bleScanning = false;
+    async function refresh() {
+      if (bleScanning) return;
+      try { await load(); }
+      catch (error) { byId('linkState').textContent = 'LINK LOST'; byId('linkState').className = 'error'; }
+    }
+    byId('scanButton').addEventListener('click', async event => {
+      const button = event.currentTarget; button.disabled = true; button.textContent = '扫描中...';
+      try { await load('/api/scan'); }
+      catch (error) { byId('scanMeta').textContent = `扫描失败：${error.message}`; }
+      finally { button.disabled = false; button.textContent = '重新扫描'; }
+    });
+    byId('bleScanButton').addEventListener('click', async event => {
+      const button = event.currentTarget; bleScanning = true; button.disabled = true; button.textContent = '采样 5 秒...';
+      byId('bleMeta').textContent = '正在监听 BLE 广播，请稍候...';
+      try { renderBle(await fetchJson('/api/ble/scan')); }
+      catch (error) { byId('bleMeta').textContent = `蓝牙扫描失败：${error.message}`; }
+      finally { bleScanning = false; button.disabled = false; button.textContent = '扫描蓝牙'; refresh(); }
+    });
+    refresh(); setInterval(refresh, 2000);
+  </script>
+</body>
+</html>
