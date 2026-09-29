@@ -236,7 +236,7 @@
           </label>
           <label class="field" style="min-width:120px">
             <span>GPIO 引脚</span>
-            <input type="number" id="ledGpio" min="0" max="39" value="2">
+            <input type="number" id="ledGpio" min="0" max="39" value="5">
           </label>
           <label class="field" style="min-width:130px">
             <span>驱动极性</span>
@@ -247,8 +247,8 @@
           </label>
         </div>
         <p class="hint">
-          多数 ESP32 开发板把板载 LED 接在 <b>GPIO2</b>。若按钮没有反应，先切到
-          <b>低电平点亮</b> 试一次；也可以换引脚逐个排查（GPIO6-11 接 SPI Flash，
+          Goouuu ESP-32F 的板载蓝灯接在 <b>GPIO5</b>，使用<b>高电平点亮</b>。
+          若接的是外部 LED，可在这里修改引脚和极性；GPIO6-11 接 SPI Flash，
           GPIO34-39 只能做输入，均已被拒绝）。
         </p>
       </div>

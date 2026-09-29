@@ -14,6 +14,8 @@
 static const char *TAG = "led_control";
 
 #define LED_NVS_NAMESPACE "ledcfg"
+#define LED_NVS_VERSION_KEY "version"
+#define LED_NVS_VERSION_CURRENT 2
 #define LEDC_MODE LEDC_LOW_SPEED_MODE
 #define LEDC_CHANNEL LEDC_CHANNEL_0
 #define LEDC_TIMER LEDC_TIMER_0
@@ -245,6 +247,10 @@ esp_err_t led_control_save(void)
         err = nvs_set_u8(handle, "ahigh", active_high);
     }
     if (err == ESP_OK) {
+        err = nvs_set_u8(handle, LED_NVS_VERSION_KEY,
+                         LED_NVS_VERSION_CURRENT);
+    }
+    if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
     nvs_close(handle);
@@ -267,6 +273,7 @@ esp_err_t led_control_load(void)
     uint8_t brightness = 100;
     uint16_t period = 1000;
     uint8_t active_high = 1;
+    uint8_t version = 0;
 
     if (nvs_get_u8(handle, "gpio", &gpio) != ESP_OK) {
         gpio = LED_DEFAULT_GPIO;
@@ -283,7 +290,18 @@ esp_err_t led_control_load(void)
     if (nvs_get_u8(handle, "ahigh", &active_high) != ESP_OK) {
         active_high = 1;
     }
+    (void)nvs_get_u8(handle, LED_NVS_VERSION_KEY, &version);
     nvs_close(handle);
+
+    /* Firmware before version 2 assumed GPIO2 for every ESP32 board.  Move
+     * that legacy default to the Goouuu ESP-32F's actual user LED.  A setting
+     * saved by this firmware carries version 2 and is therefore never changed
+     * if the user deliberately selects GPIO2 for an external LED. */
+    if (version < LED_NVS_VERSION_CURRENT && gpio == 2 && active_high != 0) {
+        gpio = LED_DEFAULT_GPIO;
+        active_high = 1;
+        ESP_LOGI(TAG, "Migrated legacy LED default to GPIO%d", gpio);
+    }
 
     if (!led_gpio_is_output_capable(gpio)) {
         gpio = LED_DEFAULT_GPIO;

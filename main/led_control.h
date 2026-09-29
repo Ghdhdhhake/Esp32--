@@ -20,11 +20,10 @@ typedef enum {
     LED_MODE_BREATHE = 3,
 } led_mode_t;
 
-/* Most ESP32 dev boards (DevKitC clones, Goouuu ESP32 boards, WROOM breakout
- * boards) wire the on-board LED to GPIO2. Boards that follow the original
- * Espressif DevKitC schematic drive it active-LOW; most clones drive it
- * active-HIGH. Both the pin and the polarity are adjustable from the web UI. */
-#define LED_DEFAULT_GPIO 2
+/* The Goouuu ESP-32F board's user LED is wired to GPIO5 and is active-HIGH.
+ * Both the pin and the polarity remain adjustable from the web UI for an
+ * external LED or a different board. */
+#define LED_DEFAULT_GPIO 5
 #define LED_MIN_PERIOD_MS 100
 #define LED_MAX_PERIOD_MS 10000
 #define LED_MAX_GPIO 39
