@@ -24,7 +24,7 @@ typedef enum {
  * Both the pin and the polarity remain adjustable from the web UI for an
  * external LED or a different board. */
 #define LED_DEFAULT_GPIO 5
-#define LED_MIN_PERIOD_MS 100
+#define LED_MIN_PERIOD_MS 1000
 #define LED_MAX_PERIOD_MS 10000
 #define LED_MAX_GPIO 39
 

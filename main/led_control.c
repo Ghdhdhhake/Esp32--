@@ -34,6 +34,7 @@ static led_state_t s_state = {
 static SemaphoreHandle_t s_lock;
 static bool s_channel_ready;
 static int s_configured_gpio = -1;
+static uint32_t s_mode_started_ms;
 
 static bool led_gpio_is_output_capable(int gpio)
 {
@@ -65,6 +66,35 @@ static void led_apply_level_locked(uint32_t percent)
 
     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, duty);
     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+}
+
+static uint32_t led_level_for_state_locked(uint32_t now_ms)
+{
+    uint32_t brightness = s_state.brightness;
+    uint32_t period = s_state.period_ms;
+    if (period < LED_MIN_PERIOD_MS) {
+        period = LED_MIN_PERIOD_MS;
+    }
+
+    switch (s_state.mode) {
+    case LED_MODE_OFF:
+        return 0;
+    case LED_MODE_ON:
+        return brightness;
+    case LED_MODE_BLINK: {
+        /* Start each requested blink with a visible ON interval. */
+        uint32_t phase = (now_ms - s_mode_started_ms) % period;
+        return phase < (period / 2) ? brightness : 0;
+    }
+    case LED_MODE_BREATHE: {
+        uint32_t phase = (now_ms - s_mode_started_ms) % period;
+        uint32_t half = period / 2;
+        uint32_t triangle = phase < half ? phase : (period - phase);
+        return brightness * triangle / half;
+    }
+    default:
+        return 0;
+    }
 }
 
 static esp_err_t led_attach_channel_locked(int gpio)
@@ -121,38 +151,9 @@ static void led_task(void *argument)
 
     while (true) {
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        uint32_t level = 0;
 
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        led_mode_t mode = s_state.mode;
-        uint32_t brightness = s_state.brightness;
-        uint32_t period = s_state.period_ms ? s_state.period_ms : 1000;
-        xSemaphoreGive(s_lock);
-
-        switch (mode) {
-        case LED_MODE_OFF:
-            level = 0;
-            break;
-        case LED_MODE_ON:
-            level = brightness;
-            break;
-        case LED_MODE_BLINK:
-            level = (now_ms % period) < (period / 2) ? brightness : 0;
-            break;
-        case LED_MODE_BREATHE: {
-            uint32_t phase = now_ms % period;
-            uint32_t half = period / 2 ? period / 2 : 1;
-            uint32_t triangle = phase < half ? phase : (period - phase);
-            level = brightness * triangle / half;
-            break;
-        }
-        default:
-            level = 0;
-            break;
-        }
-
-        xSemaphoreTake(s_lock, portMAX_DELAY);
-        led_apply_level_locked(level);
+        led_apply_level_locked(led_level_for_state_locked(now_ms));
         xSemaphoreGive(s_lock);
 
         vTaskDelay(pdMS_TO_TICKS(LED_TASK_PERIOD_MS));
@@ -202,6 +203,8 @@ esp_err_t led_control_set_mode(led_mode_t mode, uint8_t brightness,
     s_state.mode = mode;
     s_state.brightness = brightness;
     s_state.period_ms = period_ms;
+    s_mode_started_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    led_apply_level_locked(led_level_for_state_locked(s_mode_started_ms));
     xSemaphoreGive(s_lock);
     return ESP_OK;
 }
@@ -316,8 +319,9 @@ esp_err_t led_control_load(void)
     s_state.gpio = gpio;
     s_state.mode = (led_mode_t)mode;
     s_state.brightness = brightness > 100 ? 100 : brightness;
-    s_state.period_ms = period;
+    s_state.period_ms = period < LED_MIN_PERIOD_MS ? LED_MIN_PERIOD_MS : period;
     s_state.active_high = active_high != 0;
+    s_mode_started_ms = (uint32_t)(esp_timer_get_time() / 1000);
     xSemaphoreGive(s_lock);
 
     ESP_LOGI(TAG, "Restored LED config: GPIO%d mode=%u brightness=%u%%",
