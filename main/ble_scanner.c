@@ -362,17 +362,23 @@ static bool finish_scan(bool ok, int reason)
 /** Detect a scan whose completion event never arrived (controller hiccup). */
 static void refresh_scan_state(void)
 {
+    /* Snapshot the whole timing triple under the lock.  s_scan_start_us is a
+     * 64-bit value that the start path publishes before it flags the scan as
+     * running, so a torn read here would compute a nonsense elapsed time and
+     * declare a healthy scan timed out. */
     portENTER_CRITICAL(&s_state_lock);
     bool running = (s_state == BLE_SCAN_RUNNING);
+    int64_t start_us = s_scan_start_us;
+    uint32_t duration_ms = s_scan_duration_ms;
     portEXIT_CRITICAL(&s_state_lock);
 
     if (!running) {
         return;
     }
 
-    int64_t elapsed_us = esp_timer_get_time() - s_scan_start_us;
+    int64_t elapsed_us = esp_timer_get_time() - start_us;
     uint32_t elapsed_ms = (uint32_t)(elapsed_us / 1000);
-    if (elapsed_ms <= s_scan_duration_ms + BLE_SCANNER_SCAN_GRACE_MS) {
+    if (elapsed_ms <= duration_ms + BLE_SCANNER_SCAN_GRACE_MS) {
         return;
     }
 
@@ -443,11 +449,18 @@ static int gap_event_handler(struct ble_gap_event *event, void *argument)
 
 static void host_reset_callback(int reason)
 {
-    s_ready = false;
+    /* The host died without a DISC_COMPLETE event, so close the scan state
+     * machine exactly like every other path: under s_state_lock.  Writing
+     * s_scanning/s_state here without it could race finish_scan() and let the
+     * controller event and the timeout fallback both count the same scan. */
+    portENTER_CRITICAL(&s_state_lock);
     s_scanning = false;
+    s_state = BLE_SCAN_ERROR;
+    portEXIT_CRITICAL(&s_state_lock);
+
+    s_ready = false;
     s_advertising = false;
     s_connected = false;
-    s_state = BLE_SCAN_ERROR;
     s_host_resets++;
     ESP_LOGE(TAG, "NimBLE host reset; reason=%d (total %" PRIu32 ")",
              reason, s_host_resets);
@@ -595,12 +608,14 @@ esp_err_t ble_scanner_advertising_stop(void)
     }
 
     int rc = ble_gap_adv_stop();
-    s_advertising = false;
-    advertising_save();
     if (rc != 0 && rc != BLE_HS_EALREADY) {
+        /* The controller is still advertising: keep reporting the state the
+         * radio is actually in instead of clearing the flag anyway. */
         ESP_LOGW(TAG, "ble_gap_adv_stop rc=%d", rc);
         return ESP_FAIL;
     }
+    s_advertising = false;
+    advertising_save();
     ESP_LOGI(TAG, "BLE advertising stopped");
     return ESP_OK;
 }

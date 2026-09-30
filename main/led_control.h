@@ -25,7 +25,7 @@ typedef enum {
  * external LED or a different board. */
 #define LED_DEFAULT_GPIO 5
 #define LED_MIN_PERIOD_MS 1000
-#define LED_MAX_PERIOD_MS 5000
+#define LED_MAX_PERIOD_MS 10000
 #define LED_MAX_GPIO 39
 
 typedef struct {
@@ -46,6 +46,9 @@ esp_err_t led_control_set_mode(led_mode_t mode, uint8_t brightness,
                                uint16_t period_ms);
 
 void led_control_get_state(led_state_t *out);
+
+/** True while the LED driver owns `gpio` (its output channel is attached). */
+bool led_control_owns_gpio(int gpio);
 
 /** Persist the current state into NVS. */
 esp_err_t led_control_save(void);

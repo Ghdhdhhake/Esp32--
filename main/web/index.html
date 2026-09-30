@@ -528,13 +528,23 @@
       });
     }
 
+    /* Two pollers write this pill: /api/status every 2.5 s and
+     * /api/ble/status every 700 ms while a scan runs.  They have to derive the
+     * same text from the same state, or the indicator flips back and forth. */
+    function renderBleSelfPill(connected, hostReady) {
+      const pill = $('bleSelfPill');
+      pill.textContent = connected
+        ? '手机已连接'
+        : hostReady ? 'GATT 可连接' : 'BLE 主机未就绪';
+      pill.className = `pill ${connected || hostReady ? 'ok' : 'error'}`;
+    }
+
     function renderBleSummary(ble) {
       $('bleAdvPill').textContent = ble.connected
         ? `手机已连接 · ${ble.adv_name}`
         : ble.advertising ? `可连接广播中 · ${ble.adv_name}` : '广播关闭';
       $('bleAdvPill').className = `pill ${ble.connected || ble.advertising ? 'ok' : ''}`;
-      $('bleSelfPill').textContent = ble.host_ready ? 'BLE 主机就绪' : 'BLE 主机未就绪';
-      $('bleSelfPill').className = `pill ${ble.host_ready ? 'ok' : 'error'}`;
+      renderBleSelfPill(ble.connected === true, ble.host_ready === true);
       $('advToggle').textContent = ble.connected
         ? '停止自动广播' : ble.advertising ? '停止广播' : '开启广播';
       if (document.activeElement !== $('advName')) {
@@ -613,6 +623,7 @@
 
     /* ---------------- LED ---------------- */
     let ledSaveTimer = null;
+    let ledResetTimer = null;
     function currentLedPayload() {
       const active = [...$('ledMode').children].find(button => button.classList.contains('active'));
       return {
@@ -626,10 +637,17 @@
     async function pushLed(immediate) {
       ledEditing = true;
       clearTimeout(ledSaveTimer);
+      /* Cancel a pending "editing finished" timer from the previous request:
+       * if it fired now it would drop the guard mid-edit and let the 2.5 s
+       * status poll rewrite the sliders under the user's finger. */
+      clearTimeout(ledResetTimer);
       const send = async () => {
         try { await postJson('/api/led', currentLedPayload()); }
         catch (error) { $('ledMeta').textContent = `LED 设置失败：${error.message}`; }
-        finally { setTimeout(() => { ledEditing = false; }, 400); }
+        finally {
+          clearTimeout(ledResetTimer);
+          ledResetTimer = setTimeout(() => { ledEditing = false; }, 400);
+        }
       };
       if (immediate) await send();
       else ledSaveTimer = setTimeout(send, 180);
@@ -710,9 +728,7 @@
     function renderBleStatus(data) {
       $('bleMeta').textContent =
         `${data.ble_count} 个广播设备 · 扫描序号 ${data.ble_scan_id} · 原始报文 ${data.diag.adv_reports_scan}`;
-      $('bleSelfPill').textContent = data.connected ? '手机已连接' :
-        (data.diag.host_ready ? 'GATT 可连接' : 'BLE 主机未就绪');
-      $('bleSelfPill').className = `pill ${data.connected ? 'ok' : ''}`;
+      renderBleSelfPill(data.connected === true, data.diag.host_ready === true);
       $('bleStatePill').textContent = `状态 ${bleStateLabel(data.scan_state)}`;
       $('bleStatePill').className = 'pill ' +
         (data.scan_state === 'error' ? 'error' : data.scan_state === 'done' ? 'ok' : '');
@@ -735,6 +751,10 @@
           const hint = rc === 30 ? '（BLE 主机未就绪）' : rc === 13 ? '（扫描超时，控制器没回事件）' : '';
           $('bleMeta').textContent += ` · 失败 rc=${rc}${hint}`;
         }
+      } else {
+        /* A scan may already be running (for example right after a page
+         * reload): keep the stop button usable. */
+        $('bleStopButton').disabled = false;
       }
     }
 
@@ -758,6 +778,12 @@
       } catch (error) {
         $('bleMeta').textContent = `无法启动扫描：${error.message}`;
         button.disabled = false; button.textContent = '开始扫描';
+        /* A 409 means the device is already scanning: mirror that state so the
+         * stop button works.  The interval clears itself on the first poll
+         * that reports the scan is no longer running. */
+        await pollBle();
+        clearInterval(bleTimer);
+        bleTimer = setInterval(pollBle, 700);
       }
     });
     $('bleStopButton').addEventListener('click', async () => {
@@ -915,7 +941,17 @@
         button.textContent = '暂停跟随'; button.classList.add('active');
       }
     });
-    $('logClear').addEventListener('click', () => { $('logView').textContent = '(本地清屏)'; });
+    $('logClear').addEventListener('click', () => {
+      /* Clearing while the follower keeps pulling would be undone within
+       * 2.5 s, so the button pauses the follower as well. */
+      if (logTimer) {
+        clearInterval(logTimer); logTimer = null;
+        $('logToggle').textContent = '开始跟随';
+        $('logToggle').classList.remove('active');
+      }
+      $('logView').textContent = '(本地清屏)';
+      $('logMeta').textContent = '已清屏（跟随已暂停）';
+    });
 
     /* ---------------- 启动 ---------------- */
     refresh();

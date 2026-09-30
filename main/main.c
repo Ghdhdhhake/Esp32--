@@ -29,6 +29,10 @@
 #define MAX_AP_RECORDS 30
 #define MAX_JSON_BODY 1024
 #define MAX_LOG_SNAPSHOT 8192
+/* A router reboot or an AP channel switch drops the association, and the STA
+ * has to bring itself back: without a bounded retry the page keeps reporting
+ * "connecting" forever and only a manual click revives the link. */
+#define STA_CONNECT_RETRY_MAX 5
 
 static const char *TAG = "device_manager";
 
@@ -51,6 +55,7 @@ static uint32_t s_scan_id;
 
 static bool s_sta_connected;
 static bool s_sta_configured;
+static int s_sta_retry;
 static char s_sta_ssid[33];
 static char s_sta_ip[16] = "0.0.0.0";
 static char s_sta_gw[16] = "0.0.0.0";
@@ -196,7 +201,16 @@ static void wifi_event_handler(void *argument, esp_event_base_t base,
             strlcpy(s_sta_ip, "0.0.0.0", sizeof(s_sta_ip));
             strlcpy(s_sta_gw, "0.0.0.0", sizeof(s_sta_gw));
             s_sta_rssi = 0;
-            ESP_LOGW(TAG, "STA disconnected");
+            if (s_sta_configured && s_sta_retry < STA_CONNECT_RETRY_MAX) {
+                s_sta_retry++;
+                ESP_LOGW(TAG, "STA disconnected; reconnect attempt %d/%d",
+                         s_sta_retry, STA_CONNECT_RETRY_MAX);
+                esp_wifi_connect();
+            } else {
+                ESP_LOGW(TAG, "STA disconnected%s", s_sta_configured
+                                                       ? " (retries exhausted)"
+                                                       : "");
+            }
             break;
         }
         default:
@@ -209,6 +223,7 @@ static void wifi_event_handler(void *argument, esp_event_base_t base,
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         esp_ip4addr_ntoa(&event->ip_info.ip, s_sta_ip, sizeof(s_sta_ip));
         esp_ip4addr_ntoa(&event->ip_info.gw, s_sta_gw, sizeof(s_sta_gw));
+        s_sta_retry = 0;
         ESP_LOGI(TAG, "STA acquired IP %s (gw %s)", s_sta_ip, s_sta_gw);
     }
 }
@@ -329,8 +344,10 @@ static esp_err_t send_error_json(httpd_req_t *request, const char *status,
 {
     cJSON *root = cJSON_CreateObject();
     if (root == NULL) {
-        httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR, message);
-        return ESP_FAIL;
+        /* httpd_resp_send_err() would force "500 ..." plus a text/plain body,
+         * losing the status the caller asked for (400/409/503).  Keep the
+         * status even when there is no memory left for a JSON body. */
+        return httpd_resp_send_custom_err(request, status, message);
     }
     cJSON_AddBoolToObject(root, "ok", false);
     cJSON_AddStringToObject(root, "error", message);
@@ -568,12 +585,26 @@ static esp_err_t led_handler(httpd_req_t *request)
         return send_error_json(request, "400 Bad Request", "Invalid LED mode");
     }
 
+    /* Clamp before narrowing to uint8_t/uint16_t: the casts would otherwise
+     * wrap (brightness=300 -> 44, period_ms=70000 -> 4464) and quietly apply a
+     * value the client never asked for. */
+    if (brightness < 0) {
+        brightness = 0;
+    } else if (brightness > 100) {
+        brightness = 100;
+    }
+    if (period < LED_MIN_PERIOD_MS) {
+        period = LED_MIN_PERIOD_MS;
+    } else if (period > LED_MAX_PERIOD_MS) {
+        period = LED_MAX_PERIOD_MS;
+    }
+
     esp_err_t err = led_control_configure(gpio, active_high);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "LED GPIO%d rejected: %s", gpio, esp_err_to_name(err));
         return send_error_json(request, "400 Bad Request",
                                "GPIO cannot drive an LED (6-11 are flash pins, "
-                               "34-39 are input only)");
+                               "12/15 are strapping pins, 34-39 are input only)");
     }
 
     led_control_set_mode((led_mode_t)mode, (uint8_t)brightness,
@@ -773,6 +804,15 @@ static esp_err_t gpio_handler(httpd_req_t *request)
         return send_error_json(request, "400 Bad Request", "Missing gpio");
     }
 
+    /* The LED driver owns its pin through LEDC.  Letting the toolbox
+     * reconfigure that pad would detach the channel behind the LED driver's
+     * back, and /api/status would keep reporting an LED that no longer
+     * responds. */
+    if (led_control_owns_gpio(gpio)) {
+        return send_error_json(request, "409 Conflict",
+                               "GPIO is driven by the LED (move the LED first)");
+    }
+
     cJSON *response = cJSON_CreateObject();
     if (response == NULL) {
         return send_error_json(request, "500 Internal Server Error", "OOM");
@@ -796,8 +836,9 @@ static esp_err_t gpio_handler(httpd_req_t *request)
     if (err != ESP_OK) {
         cJSON_Delete(response);
         return send_error_json(request, "400 Bad Request",
-                               "Pin rejected (6-11 are flash pins, 20/24 do "
-                               "not exist, 34-39 are input only)");
+                               "Pin rejected (6-11 are flash pins, 12/15 are "
+                               "strapping pins, 20/24 do not exist, 34-39 are "
+                               "input only)");
     }
 
     cJSON_AddBoolToObject(response, "ok", true);
@@ -870,9 +911,12 @@ static esp_err_t wifi_handler(httpd_req_t *request)
     cJSON_Delete(root);
 
     if (strcmp(action, "disconnect") == 0) {
-        esp_wifi_disconnect();
+        /* Clear the intent *before* the driver posts STA_DISCONNECTED, or the
+         * handler's auto-reconnect would fight the user's request. */
         s_sta_configured = false;
+        s_sta_retry = 0;
         s_sta_ssid[0] = '\0';
+        esp_wifi_disconnect();
         ESP_LOGI(TAG, "STA disconnect requested");
         return send_ok_json(request);
     }
@@ -901,6 +945,11 @@ static esp_err_t wifi_handler(httpd_req_t *request)
 
     sta_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
 
+    /* Suppress the auto-reconnect until the new credentials are in place: the
+     * disconnect below posts STA_DISCONNECTED, and reconnecting with the old
+     * SSID would race the config change. */
+    s_sta_configured = false;
+    s_sta_retry = 0;
     esp_wifi_disconnect();
     esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &sta_config);
     if (err != ESP_OK) {
@@ -991,7 +1040,7 @@ static httpd_handle_t start_web_server(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.stack_size = 10240;
-    /* 13 route handlers are registered below, well above the IDF default of 8. */
+    /* 14 route handlers are registered below, well above the IDF default of 8. */
     config.max_uri_handlers = 20;
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 10;
@@ -1031,8 +1080,11 @@ static httpd_handle_t start_web_server(void)
 
 void app_main(void)
 {
-    init_nvs();
+    /* Capture logs before anything else: NVS init/erase and the Wi-Fi/BLE
+     * bring-up are exactly the failures the web log viewer needs to show, and
+     * log_ring_init() itself needs neither NVS nor the network. */
     log_ring_init();
+    init_nvs();
     ESP_LOGI(TAG, "Booting device dashboard on %s", esp_get_idf_version());
 
     init_wifi();

@@ -45,6 +45,12 @@ bool gpio_panel_is_output_capable(int gpio)
     if (gpio_panel_is_reserved(gpio)) {
         return false;
     }
+    /* GPIO 12/15 are strapping pins (MTDI/MTDO).  The toolbox leaves a pin
+     * driven until it is released again, so driving one of them can break the
+     * next boot; reading them as inputs stays allowed. */
+    if (gpio == 12 || gpio == 15) {
+        return false;
+    }
     if (gpio >= 34) {
         return false;
     }
@@ -107,6 +113,10 @@ esp_err_t gpio_panel_set_output(int gpio, int level)
     if (!gpio_panel_is_output_capable(gpio)) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (s_lock == NULL) {
+        /* gpio_panel_init() never obtained a mutex: the toolbox is unusable. */
+        return ESP_ERR_INVALID_STATE;
+    }
 
     gpio_config_t config = {
         .pin_bit_mask = 1ULL << gpio,
@@ -127,8 +137,14 @@ esp_err_t gpio_panel_set_output(int gpio, int level)
 
 esp_err_t gpio_panel_release(int gpio)
 {
-    if (gpio < 0 || gpio > GPIO_PANEL_MAX_PIN) {
+    /* Reserved pins must never be reconfigured: turning an SPI-flash pin
+     * (6..11) into a floating input hangs the chip at the next cache miss, and
+     * GPIO 20/24 do not exist on the classic ESP32. */
+    if (gpio_panel_is_reserved(gpio)) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (s_lock == NULL) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     gpio_config_t config = {
@@ -149,6 +165,9 @@ esp_err_t gpio_panel_read_input(int gpio, bool pullup, int *level)
 {
     if (level == NULL || gpio_panel_is_reserved(gpio)) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (s_lock == NULL) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     gpio_config_t config = {
@@ -183,6 +202,9 @@ esp_err_t gpio_panel_read_adc(int channel, int *raw, int *millivolts)
     }
     if (channel < 0 || channel >= GPIO_PANEL_ADC_CHANNELS) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (s_lock == NULL) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
