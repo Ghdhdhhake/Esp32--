@@ -2,10 +2,11 @@
 #
 # Two NimBLE roles are used at the same time:
 #   - observer    : scans for nearby advertisers (the "BLE spectrum" panel)
-#   - broadcaster : advertises the board itself, so a phone can find it and so
-#                   the BLE radio can be proven to transmit with a single board
+#   - broadcaster : advertises the board itself for phone discovery
+#   - peripheral  : accepts a phone connection and hosts the status GATT service
+#   - observer    : scans for nearby advertisers
 #
-# Bluedroid, central and peripheral are disabled to keep the RAM footprint down.
+# Bluedroid and central are disabled to keep the RAM footprint down.
 CONFIG_BT_ENABLED=y
 CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
 CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=n
@@ -16,7 +17,8 @@ CONFIG_BT_CONTROLLER_ENABLED=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
-CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_GATT_SERVER=y
 CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
 
 # The application outgrew the 1 MiB default slot; use the custom layout.

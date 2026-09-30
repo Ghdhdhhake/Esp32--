@@ -7,15 +7,20 @@
 
 #include "esp_bt.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
 #include "host/ble_hs_adv.h"
 #include "host/util/util.h"
+#include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+#include "os/os_mbuf.h"
 #include "nvs.h"
 
 static const char *TAG = "ble_scanner";
@@ -66,10 +71,32 @@ static volatile int s_last_sync_rc;
 static volatile int s_last_scan_rc;
 static volatile int s_last_adv_rc;
 static volatile bool s_advertising;
+static volatile bool s_advertising_enabled;
+static volatile bool s_connected;
 static uint8_t s_own_address[6];
 static uint8_t s_own_address_type;
 static bool s_own_address_valid;
 static char s_adv_name[BLE_SCANNER_ADV_NAME_SIZE] = BLE_DEFAULT_ADV_NAME;
+static char s_command_result[48] = "READY";
+
+static int gatt_access(uint16_t connection_handle, uint16_t attribute_handle,
+                       struct ble_gatt_access_ctxt *context, void *argument);
+static esp_err_t advertising_start_locked(void);
+
+static const ble_uuid128_t s_service_uuid = BLE_UUID128_INIT(
+    0xf0, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
+    0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
+static const ble_uuid128_t s_status_uuid = BLE_UUID128_INIT(
+    0xf1, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
+    0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
+static const ble_uuid128_t s_command_uuid = BLE_UUID128_INIT(
+    0xf2, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
+    0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
+static const ble_uuid128_t s_result_uuid = BLE_UUID128_INIT(
+    0xf3, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
+    0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12);
+
+static const struct ble_gatt_svc_def s_gatt_services[];
 
 /* Helpers ----------------------------------------------------------------- */
 
@@ -117,6 +144,132 @@ static void sort_devices_by_rssi(void)
         s_devices[j] = key;
     }
 }
+
+enum {
+    GATT_CHAR_STATUS = 1,
+    GATT_CHAR_COMMAND,
+    GATT_CHAR_RESULT,
+};
+
+static void set_command_result(const char *result)
+{
+    strlcpy(s_command_result, result, sizeof(s_command_result));
+}
+
+static int gatt_access(uint16_t connection_handle, uint16_t attribute_handle,
+                       struct ble_gatt_access_ctxt *context, void *argument)
+{
+    (void)connection_handle;
+    (void)attribute_handle;
+
+    uintptr_t characteristic = (uintptr_t)argument;
+    if (context->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        char value[192];
+        size_t length;
+
+        if (characteristic == GATT_CHAR_STATUS) {
+            wifi_ap_record_t ap = {0};
+            bool wifi_connected = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+            int written = snprintf(
+                value, sizeof(value),
+                "device=%s\nuptime_s=%" PRIu32 "\nfree_heap=%" PRIu32
+                "\nmin_free_heap=%" PRIu32 "\nwifi_connected=%u\n"
+                "wifi_rssi=%d\n",
+                s_adv_name,
+                (uint32_t)(esp_timer_get_time() / 1000000),
+                (uint32_t)esp_get_free_heap_size(),
+                (uint32_t)esp_get_minimum_free_heap_size(),
+                wifi_connected ? 1u : 0u,
+                wifi_connected ? ap.rssi : 0);
+            if (written < 0) {
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            length = (size_t)written;
+            if (length >= sizeof(value)) {
+                length = sizeof(value) - 1;
+            }
+        } else if (characteristic == GATT_CHAR_RESULT) {
+            strlcpy(value, s_command_result, sizeof(value));
+            length = strlen(value);
+        } else {
+            return BLE_ATT_ERR_READ_NOT_PERMITTED;
+        }
+
+        return os_mbuf_append(context->om, value, length) == 0
+                   ? 0
+                   : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+
+    if (context->op == BLE_GATT_ACCESS_OP_WRITE_CHR &&
+        characteristic == GATT_CHAR_COMMAND) {
+        uint16_t packet_length = OS_MBUF_PKTLEN(context->om);
+        char command[32] = {0};
+        if (packet_length == 0 || packet_length >= sizeof(command) ||
+            os_mbuf_copydata(context->om, 0, packet_length, command) != 0) {
+            set_command_result("ERR:COMMAND_LENGTH");
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        command[packet_length] = '\0';
+        while (packet_length > 0 &&
+               (command[packet_length - 1] == '\n' ||
+                command[packet_length - 1] == '\r')) {
+            command[--packet_length] = '\0';
+        }
+
+        if (strcmp(command, "PING") == 0) {
+            set_command_result("PONG");
+        } else if (strcmp(command, "SCAN_WIFI") == 0) {
+            wifi_scan_config_t config = {.show_hidden = true};
+            esp_err_t err = esp_wifi_scan_start(&config, false);
+            if (err == ESP_OK) {
+                set_command_result("SCAN_STARTED");
+            } else {
+                snprintf(s_command_result, sizeof(s_command_result),
+                         "ERR:SCAN:%s", esp_err_to_name(err));
+            }
+        } else {
+            set_command_result("ERR:UNKNOWN_COMMAND");
+            return BLE_ATT_ERR_VALUE_NOT_ALLOWED;
+        }
+
+        ESP_LOGI(TAG, "GATT command '%s' -> %s", command,
+                 s_command_result);
+        return 0;
+    }
+
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+static const struct ble_gatt_chr_def s_gatt_characteristics[] = {
+    {
+        .uuid = &s_status_uuid.u,
+        .access_cb = gatt_access,
+        .arg = (void *)(uintptr_t)GATT_CHAR_STATUS,
+        .flags = BLE_GATT_CHR_F_READ,
+    },
+    {
+        .uuid = &s_command_uuid.u,
+        .access_cb = gatt_access,
+        .arg = (void *)(uintptr_t)GATT_CHAR_COMMAND,
+        .flags = BLE_GATT_CHR_F_WRITE,
+    },
+    {
+        .uuid = &s_result_uuid.u,
+        .access_cb = gatt_access,
+        .arg = (void *)(uintptr_t)GATT_CHAR_RESULT,
+        .flags = BLE_GATT_CHR_F_READ,
+    },
+    {0},
+};
+
+static const struct ble_gatt_svc_def s_gatt_services[] = {
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &s_service_uuid.u,
+        .characteristics = s_gatt_characteristics,
+    },
+    {0},
+};
 
 static void save_advertisement(const struct ble_gap_disc_desc *discovery)
 {
@@ -255,6 +408,32 @@ static int gap_event_handler(struct ble_gap_event *event, void *argument)
                  event->adv_complete.reason);
         return 0;
 
+    case BLE_GAP_EVENT_CONNECT:
+        if (event->connect.status == 0) {
+            s_connected = true;
+            s_advertising = false;
+            ESP_LOGI(TAG, "BLE phone connected (handle=%u)",
+                     event->connect.conn_handle);
+        } else {
+            ESP_LOGW(TAG, "BLE connection failed (status=%d)",
+                     event->connect.status);
+        }
+        return 0;
+
+    case BLE_GAP_EVENT_DISCONNECT:
+        s_connected = false;
+        s_advertising = false;
+        ESP_LOGI(TAG, "BLE phone disconnected (reason=%d)",
+                 event->disconnect.reason);
+        if (s_advertising_enabled) {
+            esp_err_t err = advertising_start_locked();
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "Could not resume BLE advertising: %s",
+                         esp_err_to_name(err));
+            }
+        }
+        return 0;
+
     default:
         return 0;
     }
@@ -267,6 +446,7 @@ static void host_reset_callback(int reason)
     s_ready = false;
     s_scanning = false;
     s_advertising = false;
+    s_connected = false;
     s_state = BLE_SCAN_ERROR;
     s_host_resets++;
     ESP_LOGE(TAG, "NimBLE host reset; reason=%d (total %" PRIu32 ")",
@@ -323,7 +503,7 @@ static esp_err_t advertising_save(void)
     }
     err = nvs_set_str(handle, "advname", s_adv_name);
     if (err == ESP_OK) {
-        uint8_t enabled = s_advertising ? 1 : 0;
+        uint8_t enabled = s_advertising_enabled ? 1 : 0;
         err = nvs_set_u8(handle, "adven", enabled);
     }
     if (err == ESP_OK) {
@@ -342,6 +522,8 @@ static esp_err_t advertising_start_locked(void)
         return ESP_OK;
     }
 
+    ble_svc_gap_device_name_set(s_adv_name);
+
     struct ble_hs_adv_fields fields = {0};
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     fields.name = (const uint8_t *)s_adv_name;
@@ -357,8 +539,19 @@ static esp_err_t advertising_start_locked(void)
         return ESP_FAIL;
     }
 
+    struct ble_hs_adv_fields response_fields = {0};
+    response_fields.uuids128 = (ble_uuid128_t *)&s_service_uuid;
+    response_fields.num_uuids128 = 1;
+    response_fields.uuids128_is_complete = 1;
+    rc = ble_gap_adv_rsp_set_fields(&response_fields);
+    if (rc != 0) {
+        s_last_adv_rc = rc;
+        ESP_LOGE(TAG, "ble_gap_adv_rsp_set_fields failed rc=%d", rc);
+        return ESP_FAIL;
+    }
+
     struct ble_gap_adv_params parameters = {0};
-    parameters.conn_mode = BLE_GAP_CONN_MODE_NON;
+    parameters.conn_mode = BLE_GAP_CONN_MODE_UND;
     parameters.disc_mode = BLE_GAP_DISC_MODE_GEN;
 
     uint8_t own_address_type = 0;
@@ -385,6 +578,7 @@ esp_err_t ble_scanner_advertising_start(const char *name)
     if (name != NULL && name[0] != '\0') {
         strlcpy(s_adv_name, name, sizeof(s_adv_name));
     }
+    s_advertising_enabled = true;
     esp_err_t err = advertising_start_locked();
     if (err == ESP_OK) {
         advertising_save();
@@ -394,6 +588,7 @@ esp_err_t ble_scanner_advertising_start(const char *name)
 
 esp_err_t ble_scanner_advertising_stop(void)
 {
+    s_advertising_enabled = false;
     if (!s_advertising) {
         advertising_save();
         return ESP_OK;
@@ -432,6 +627,7 @@ esp_err_t ble_scanner_load(void)
                             enabled != 0;
     nvs_close(handle);
 
+    s_advertising_enabled = want_advertising;
     if (want_advertising) {
         esp_err_t start_err = advertising_start_locked();
         if (start_err != ESP_OK) {
@@ -461,6 +657,20 @@ esp_err_t ble_scanner_init(void)
         ESP_LOGE(TAG, "NimBLE initialization failed: %s",
                  esp_err_to_name(result));
         return result;
+    }
+
+    /* Register GATT services before starting the NimBLE host task, following
+     * ESP-IDF's peripheral example. */
+    ble_svc_gap_init();
+    ble_svc_gatt_init();
+    ble_svc_gap_device_name_set(s_adv_name);
+    int gatt_rc = ble_gatts_count_cfg(s_gatt_services);
+    if (gatt_rc == 0) {
+        gatt_rc = ble_gatts_add_svcs(s_gatt_services);
+    }
+    if (gatt_rc != 0) {
+        ESP_LOGE(TAG, "Could not register GATT services rc=%d", gatt_rc);
+        return ESP_FAIL;
     }
 
     ble_hs_cfg.reset_cb = host_reset_callback;
@@ -640,6 +850,7 @@ void ble_scanner_get_diag(ble_scanner_diag_t *out)
     out->scan_runs = s_scan_runs;
     out->scan_timeouts = s_scan_timeouts;
     out->advertising = s_advertising;
+    out->connected = s_connected;
     out->last_adv_rc = s_last_adv_rc;
     out->adv_starts = s_adv_starts;
     out->own_address_type = s_own_address_type;
@@ -660,6 +871,14 @@ void ble_scanner_get_diag(ble_scanner_diag_t *out)
     } else {
         out->scan_elapsed_ms = s_scan_duration_ms;
     }
+}
+
+void ble_scanner_get_command_result(char *out, size_t out_size)
+{
+    if (out == NULL || out_size == 0) {
+        return;
+    }
+    strlcpy(out, s_command_result, out_size);
 }
 
 const char *ble_scanner_address_type_name(uint8_t address_type)

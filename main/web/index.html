@@ -288,10 +288,11 @@
           <button id="advToggle" type="button" style="align-self:flex-end">开启广播</button>
         </div>
         <p class="hint">
-          <b>只有一个开发板时的自检方法</b>：打开上面的「广播」，然后用手机的
-          nRF Connect / 蓝牙调试助手搜索 —— 能搜到 <b>ESP32-DASH</b> 就说明板子的 BLE
-          发射通路正常；再用本页扫描能看到手机/耳机等设备，说明接收通路也正常。
-          两边都通，问题就不在板子上。
+          用手机 <b>nRF Connect</b> 搜索并连接本机名称，然后展开服务
+          <code>12345678-1234-5678-1234-56789abcdef0</code>：
+          <code>...def1</code> 可读取状态，<code>...def2</code> 写入
+          <code>PING</code> 或 <code>SCAN_WIFI</code>，再读 <code>...def3</code> 查看结果。
+          状态包含运行时间、可用内存及 Wi-Fi 连接/RSSI。
         </p>
 
         <details class="diag" id="bleDiagBox">
@@ -528,11 +529,14 @@
     }
 
     function renderBleSummary(ble) {
-      $('bleAdvPill').textContent = ble.advertising ? `广播中 · ${ble.adv_name}` : '广播关闭';
-      $('bleAdvPill').className = `pill ${ble.advertising ? 'ok' : ''}`;
+      $('bleAdvPill').textContent = ble.connected
+        ? `手机已连接 · ${ble.adv_name}`
+        : ble.advertising ? `可连接广播中 · ${ble.adv_name}` : '广播关闭';
+      $('bleAdvPill').className = `pill ${ble.connected || ble.advertising ? 'ok' : ''}`;
       $('bleSelfPill').textContent = ble.host_ready ? 'BLE 主机就绪' : 'BLE 主机未就绪';
       $('bleSelfPill').className = `pill ${ble.host_ready ? 'ok' : 'error'}`;
-      $('advToggle').textContent = ble.advertising ? '停止广播' : '开启广播';
+      $('advToggle').textContent = ble.connected
+        ? '停止自动广播' : ble.advertising ? '停止广播' : '开启广播';
       if (document.activeElement !== $('advName')) {
         $('advName').value = ble.adv_name || '';
       }
@@ -706,6 +710,9 @@
     function renderBleStatus(data) {
       $('bleMeta').textContent =
         `${data.ble_count} 个广播设备 · 扫描序号 ${data.ble_scan_id} · 原始报文 ${data.diag.adv_reports_scan}`;
+      $('bleSelfPill').textContent = data.connected ? '手机已连接' :
+        (data.diag.host_ready ? 'GATT 可连接' : 'BLE 主机未就绪');
+      $('bleSelfPill').className = `pill ${data.connected ? 'ok' : ''}`;
       $('bleStatePill').textContent = `状态 ${bleStateLabel(data.scan_state)}`;
       $('bleStatePill').className = 'pill ' +
         (data.scan_state === 'error' ? 'error' : data.scan_state === 'done' ? 'ok' : '');
@@ -759,7 +766,8 @@
     });
     $('advToggle').addEventListener('click', async event => {
       const button = event.currentTarget;
-      const enable = !(status && status.ble.advertising);
+      const enable = status && status.ble.connected
+        ? false : !(status && status.ble.advertising);
       button.disabled = true;
       try {
         await postJson('/api/ble/adv', { enabled: enable, name: $('advName').value.trim() });

@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "driver/gpio.h"
-#include "driver/ledc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -16,13 +15,13 @@ static const char *TAG = "led_control";
 #define LED_NVS_NAMESPACE "ledcfg"
 #define LED_NVS_VERSION_KEY "version"
 #define LED_NVS_VERSION_CURRENT 3
-#define LEDC_MODE LEDC_LOW_SPEED_MODE
-#define LEDC_CHANNEL LEDC_CHANNEL_0
-#define LEDC_TIMER LEDC_TIMER_0
-#define LEDC_DUTY_BITS LEDC_TIMER_10_BIT
-#define LEDC_DUTY_MAX ((1u << 10) - 1)
-#define LEDC_FREQ_HZ 5000
-#define LED_TASK_PERIOD_MS 10
+/* GPIO5's board LED is more reliable when it is driven directly.  The task
+ * supplies a small software-PWM signal for brightness and breathe mode.
+ * sdkconfig uses a 100 Hz scheduler, so one tick is 10 ms.  Use an explicit
+ * tick delay: pdMS_TO_TICKS(1) would be zero and turn this task into a busy
+ * loop that starves the idle task watchdog. */
+#define LED_TASK_DELAY_TICKS 1
+#define LED_PWM_PERIOD_MS 10
 
 static led_state_t s_state = {
     .gpio = LED_DEFAULT_GPIO,
@@ -32,7 +31,7 @@ static led_state_t s_state = {
     .active_high = true,
 };
 static SemaphoreHandle_t s_lock;
-static bool s_channel_ready;
+static bool s_gpio_ready;
 static int s_configured_gpio = -1;
 static uint32_t s_mode_started_ms;
 
@@ -52,20 +51,26 @@ static bool led_gpio_is_output_capable(int gpio)
     return true;
 }
 
-static void led_apply_level_locked(uint32_t percent)
+static void led_apply_level_locked(uint32_t percent, uint32_t now_ms)
 {
-    if (!s_channel_ready) {
+    if (!s_gpio_ready) {
         return;
     }
     if (percent > 100) {
         percent = 100;
     }
 
-    uint32_t on_duty = (LEDC_DUTY_MAX * percent) / 100u;
-    uint32_t duty = s_state.active_high ? on_duty : (LEDC_DUTY_MAX - on_duty);
+    /* At 0% and 100% keep the pin at a fixed level.  This is especially
+     * important for the "always on" mode: it must not depend on a PWM
+     * peripheral remaining attached after a web request. */
+    bool logical_on = percent == 100;
+    if (percent != 0 && percent != 100) {
+        uint32_t on_time = (LED_PWM_PERIOD_MS * percent) / 100u;
+        logical_on = (now_ms % LED_PWM_PERIOD_MS) < on_time;
+    }
 
-    ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, duty);
-    ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+    int physical_level = s_state.active_high ? logical_on : !logical_on;
+    gpio_set_level(s_configured_gpio, physical_level);
 }
 
 static uint32_t led_level_for_state_locked(uint32_t now_ms)
@@ -97,48 +102,34 @@ static uint32_t led_level_for_state_locked(uint32_t now_ms)
     }
 }
 
-static esp_err_t led_attach_channel_locked(int gpio)
+static esp_err_t led_attach_gpio_locked(int gpio)
 {
-    ledc_timer_config_t timer_config = {
-        .speed_mode = LEDC_MODE,
-        .duty_resolution = LEDC_DUTY_BITS,
-        .timer_num = LEDC_TIMER,
-        .freq_hz = LEDC_FREQ_HZ,
-        .clk_cfg = LEDC_AUTO_CLK,
+    gpio_config_t config = {
+        .pin_bit_mask = 1ULL << gpio,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
     };
-    esp_err_t err = ledc_timer_config(&timer_config);
+    esp_err_t err = gpio_config(&config);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ledc_timer_config failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "gpio_config failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    ledc_channel_config_t channel_config = {
-        .gpio_num = gpio,
-        .speed_mode = LEDC_MODE,
-        .channel = LEDC_CHANNEL,
-        .intr_type = LEDC_INTR_DISABLE,
-        .timer_sel = LEDC_TIMER,
-        .duty = s_state.active_high ? 0 : LEDC_DUTY_MAX,
-        .hpoint = 0,
-    };
-    err = ledc_channel_config(&channel_config);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "ledc_channel_config failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    s_channel_ready = true;
+    s_gpio_ready = true;
     s_configured_gpio = gpio;
+    led_apply_level_locked(0, (uint32_t)(esp_timer_get_time() / 1000));
     return ESP_OK;
 }
 
-static void led_detach_channel_locked(void)
+static void led_detach_gpio_locked(void)
 {
-    if (!s_channel_ready) {
+    if (!s_gpio_ready) {
         return;
     }
-    ledc_stop(LEDC_MODE, LEDC_CHANNEL, 0);
-    s_channel_ready = false;
+    led_apply_level_locked(0, (uint32_t)(esp_timer_get_time() / 1000));
+    s_gpio_ready = false;
     if (s_configured_gpio >= 0) {
         gpio_reset_pin(s_configured_gpio);
     }
@@ -153,10 +144,10 @@ static void led_task(void *argument)
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        led_apply_level_locked(led_level_for_state_locked(now_ms));
+        led_apply_level_locked(led_level_for_state_locked(now_ms), now_ms);
         xSemaphoreGive(s_lock);
 
-        vTaskDelay(pdMS_TO_TICKS(LED_TASK_PERIOD_MS));
+        vTaskDelay(LED_TASK_DELAY_TICKS);
     }
 }
 
@@ -168,9 +159,9 @@ esp_err_t led_control_configure(int gpio, bool active_high)
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (gpio != s_configured_gpio || active_high != s_state.active_high) {
-        led_detach_channel_locked();
+        led_detach_gpio_locked();
         s_state.active_high = active_high;
-        esp_err_t err = led_attach_channel_locked(gpio);
+        esp_err_t err = led_attach_gpio_locked(gpio);
         if (err != ESP_OK) {
             xSemaphoreGive(s_lock);
             return err;
@@ -204,7 +195,8 @@ esp_err_t led_control_set_mode(led_mode_t mode, uint8_t brightness,
     s_state.brightness = brightness;
     s_state.period_ms = period_ms;
     s_mode_started_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    led_apply_level_locked(led_level_for_state_locked(s_mode_started_ms));
+    led_apply_level_locked(led_level_for_state_locked(s_mode_started_ms),
+                           s_mode_started_ms);
     xSemaphoreGive(s_lock);
     return ESP_OK;
 }
@@ -344,7 +336,7 @@ esp_err_t led_control_init(void)
     led_control_get_state(&snapshot);
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    esp_err_t err = led_attach_channel_locked(snapshot.gpio);
+    esp_err_t err = led_attach_gpio_locked(snapshot.gpio);
     xSemaphoreGive(s_lock);
     if (err != ESP_OK) {
         return err;

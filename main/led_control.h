@@ -25,7 +25,7 @@ typedef enum {
  * external LED or a different board. */
 #define LED_DEFAULT_GPIO 5
 #define LED_MIN_PERIOD_MS 1000
-#define LED_MAX_PERIOD_MS 10000
+#define LED_MAX_PERIOD_MS 5000
 #define LED_MAX_GPIO 39
 
 typedef struct {

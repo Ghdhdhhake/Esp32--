@@ -28,6 +28,12 @@
 #define BLE_SCANNER_DEFAULT_SCAN_MS 8000
 #define BLE_SCANNER_MAX_SCAN_MS 30000
 
+/* Custom GATT service used by phone apps such as nRF Connect. */
+#define BLE_DEVICE_SERVICE_UUID "12345678-1234-5678-1234-56789abcdef0"
+#define BLE_DEVICE_STATUS_UUID  "12345678-1234-5678-1234-56789abcdef1"
+#define BLE_DEVICE_COMMAND_UUID "12345678-1234-5678-1234-56789abcdef2"
+#define BLE_DEVICE_RESULT_UUID  "12345678-1234-5678-1234-56789abcdef3"
+
 typedef struct {
     char name[BLE_SCANNER_NAME_SIZE];
     char address[18];
@@ -60,6 +66,7 @@ typedef struct {
     uint32_t scan_timeouts;
     uint32_t unique_devices;
     bool advertising;
+    bool connected;
     int last_adv_rc; /* rc of the last ble_gap_adv_start() attempt */
     char adv_name[BLE_SCANNER_ADV_NAME_SIZE];
     uint8_t own_address[6];
@@ -89,6 +96,9 @@ void ble_scanner_get_diag(ble_scanner_diag_t *out);
 esp_err_t ble_scanner_advertising_start(const char *name);
 
 esp_err_t ble_scanner_advertising_stop(void);
+
+/** Last result produced by a writable GATT command. */
+void ble_scanner_get_command_result(char *out, size_t out_size);
 
 /** Restore the persisted advertising preference from NVS. */
 esp_err_t ble_scanner_load(void);

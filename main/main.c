@@ -464,6 +464,7 @@ static cJSON *create_status_json(void)
     ble_scanner_get_diag(&diag);
     cJSON *ble = cJSON_AddObjectToObject(root, "ble");
     cJSON_AddBoolToObject(ble, "advertising", diag.advertising);
+    cJSON_AddBoolToObject(ble, "connected", diag.connected);
     cJSON_AddStringToObject(ble, "adv_name", diag.adv_name);
     cJSON_AddBoolToObject(ble, "host_ready", diag.host_ready);
     cJSON_AddNumberToObject(ble, "unique_devices", diag.unique_devices);
@@ -606,7 +607,11 @@ static esp_err_t ble_status_handler(httpd_req_t *request)
     cJSON_AddNumberToObject(root, "ble_count", device_count);
     cJSON_AddNumberToObject(root, "ble_scan_id", ble_scanner_get_scan_id());
     cJSON_AddBoolToObject(root, "advertising", diag.advertising);
+    cJSON_AddBoolToObject(root, "connected", diag.connected);
     cJSON_AddStringToObject(root, "adv_name", diag.adv_name);
+    char command_result[48];
+    ble_scanner_get_command_result(command_result, sizeof(command_result));
+    cJSON_AddStringToObject(root, "command_result", command_result);
 
     static const char *state_names[] = {"idle", "running", "done", "error"};
     const char *state_name = "idle";
