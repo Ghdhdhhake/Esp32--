@@ -83,8 +83,6 @@
     .value { margin-top: 27px; font-size: clamp(23px, 3vw, 34px); line-height: 1; font-weight: 650; letter-spacing: -.035em; overflow-wrap: anywhere; }
     .unit { color: var(--green); font: 11px Consolas, monospace; margin-left: 5px; }
     .panel { margin-top: 18px; animation: rise .6s .18s ease both; }
-    .panel.accent-led { --green: var(--amber); --line: rgba(255, 200, 87, .2); }
-    .panel.accent-ble { --green: var(--blue); --line: rgba(114, 220, 255, .2); }
     .panel.accent-pin { --green: var(--violet); --line: rgba(183, 155, 255, .2); }
     .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 20px 22px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
     .panel-title { margin: 0; font-size: 18px; letter-spacing: -.01em; }
@@ -153,14 +151,6 @@
     .pill { display: inline-block; padding: 2px 8px; border: 1px solid var(--line); font: 10px Consolas, monospace; letter-spacing: .1em; border-radius: 999px; }
     .bar { height: 4px; background: rgba(255,255,255,.07); overflow: hidden; margin-top: 10px; }
     .bar > i { display: block; height: 100%; width: 0; background: var(--green); box-shadow: 0 0 10px var(--green); transition: width .3s ease; }
-    .led-preview { width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line); background: #0a1512; position: relative; }
-    .led-preview::after {
-      content: ""; position: absolute; inset: 8px; border-radius: 50%;
-      background: var(--ledColor, #3a4a46);
-      opacity: var(--ledOpacity, .2);
-      box-shadow: 0 0 22px var(--ledColor, transparent);
-      transition: opacity .12s linear, background .12s linear;
-    }
     details.diag { margin-top: 14px; border: 1px solid var(--line); border-radius: 2px; }
     details.diag > summary { cursor: pointer; padding: 11px 14px; color: var(--muted); font: 11px Consolas, monospace; letter-spacing: .1em; }
     details.diag[open] > summary { border-bottom: 1px solid var(--line); }
@@ -194,9 +184,12 @@
       <div>
         <div class="eyebrow">Local control plane // 192.168.4.1</div>
         <h1>DEVICE <span>CORE</span></h1>
-        <p class="sub">ESP32 单板实验室 · LED / BLE / 引脚 / 联网</p>
+        <p class="sub">ESP32 单板实验室 · 引脚 / 联网 / AI 对话</p>
       </div>
-      <div class="live"><span class="dot"></span><span id="linkState">LINK ACTIVE</span></div>
+      <div class="row" style="align-items:center">
+        <a class="pill ok" href="/chat" style="text-decoration:none">打开 AI 对话</a>
+        <div class="live"><span class="dot"></span><span id="linkState">LINK ACTIVE</span></div>
+      </div>
     </header>
 
     <section class="cards" aria-label="设备状态">
@@ -207,106 +200,6 @@
       <article class="card"><div class="label">AP clients</div><div class="value"><span id="clients">--</span><span class="unit" id="clientsMax">/ 4</span></div></article>
     </section>
 
-    <!-- ================= 板载 LED ================= -->
-    <section class="panel accent-led">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">板载 LED <small>LEDC PWM</small></h2>
-          <div class="panel-meta" id="ledMeta">等待遥测数据</div>
-        </div>
-        <div class="row" style="align-items:center">
-          <div class="led-preview" id="ledPreview"></div>
-          <div class="seg" id="ledMode">
-            <button data-mode="0">关闭</button>
-            <button data-mode="1">常亮</button>
-            <button data-mode="2">闪烁</button>
-            <button data-mode="3">呼吸</button>
-          </div>
-        </div>
-      </div>
-      <div class="panel-body">
-        <div class="row">
-          <label class="field" style="flex:1 1 240px">
-            <span>亮度 <i id="brightLabel">100%</i></span>
-            <input type="range" id="brightness" min="0" max="100" value="100">
-          </label>
-          <label class="field" style="flex:1 1 240px">
-            <span>周期 <i id="periodLabel">1000 ms</i></span>
-            <input type="range" id="period" min="1000" max="10000" step="500" value="1000">
-          </label>
-          <label class="field" style="min-width:120px">
-            <span>GPIO 引脚</span>
-            <input type="number" id="ledGpio" min="0" max="39" value="5">
-          </label>
-          <label class="field" style="min-width:130px">
-            <span>驱动极性</span>
-            <select id="ledPolarity">
-              <option value="1">高电平点亮</option>
-              <option value="0">低电平点亮</option>
-            </select>
-          </label>
-        </div>
-        <p class="hint">
-          Goouuu ESP-32F 的板载蓝灯接在 <b>GPIO5</b>，使用<b>高电平点亮</b>。
-          若接的是外部 LED，可在这里修改引脚和极性；GPIO6-11 接 SPI Flash，
-          GPIO34-39 只能做输入，均已被拒绝）。
-        </p>
-      </div>
-    </section>
-
-    <!-- ================= BLE ================= -->
-    <section class="panel accent-ble">
-      <div class="panel-head">
-        <div>
-          <h2 class="panel-title">BLE 无线电 <small>NimBLE</small></h2>
-          <div class="panel-meta" id="bleMeta">尚未采样</div>
-        </div>
-        <div class="row">
-          <button id="bleScanButton" type="button">开始扫描</button>
-          <button id="bleStopButton" class="ghost" type="button" disabled>停止</button>
-          <select id="bleDuration">
-            <option value="3000">3 秒</option>
-            <option value="5000">5 秒</option>
-            <option value="8000" selected>8 秒</option>
-            <option value="15000">15 秒</option>
-          </select>
-        </div>
-      </div>
-      <div class="panel-body">
-        <div class="row">
-          <span class="pill" id="bleStatePill">状态 --</span>
-          <span class="pill" id="bleAdvPill">广播 --</span>
-          <span class="pill" id="bleSelfPill">本机地址 --</span>
-        </div>
-        <div class="bar"><i id="bleProgress"></i></div>
-
-        <div class="row" style="margin-top:16px">
-          <label class="field" style="flex:1 1 200px">
-            <span>本机广播名称</span>
-            <input type="text" id="advName" maxlength="20" placeholder="ESP32-DASH">
-          </label>
-          <button id="advToggle" type="button" style="align-self:flex-end">开启广播</button>
-        </div>
-        <p class="hint">
-          用手机 <b>nRF Connect</b> 搜索并连接本机名称，然后展开服务
-          <code>12345678-1234-5678-1234-56789abcdef0</code>：
-          <code>...def1</code> 可读取状态，<code>...def2</code> 写入
-          <code>PING</code> 或 <code>SCAN_WIFI</code>，再读 <code>...def3</code> 查看结果。
-          状态包含运行时间、可用内存及 Wi-Fi 连接/RSSI。
-        </p>
-
-        <details class="diag" id="bleDiagBox">
-          <summary>诊断计数器（扫描不到设备时先看这里）</summary>
-          <div class="kv" id="bleDiag"></div>
-        </details>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>设备名称</th><th>地址</th><th>信号</th><th>出现次数</th><th>地址类型</th></tr></thead>
-          <tbody id="bleDevices"><tr><td colspan="5" class="empty">点击「开始扫描」</td></tr></tbody>
-        </table>
-      </div>
-    </section>
 
     <!-- ================= 引脚工具箱 ================= -->
     <section class="panel accent-pin">
@@ -484,7 +377,6 @@
 
     /* ---------------- 状态轮询 ---------------- */
     let status = null;
-    let ledEditing = false;
 
     function renderStatus(data) {
       status = data;
@@ -497,8 +389,6 @@
       $('clients').textContent = ap.clients;
       $('clientsMax').textContent = `/ ${ap.max_clients}`;
 
-      renderLed(data.led);
-      renderBleSummary(data.ble);
       renderSta(sta);
       renderNetworks(data);
       renderDevice(d, data);
@@ -508,54 +398,31 @@
       $('updated').textContent = `LAST SYNC ${new Date().toLocaleTimeString()}`;
     }
 
-    function renderLed(led) {
-      $('ledMeta').textContent =
-        `GPIO${led.gpio} · 模式 ${['关闭', '常亮', '闪烁', '呼吸'][led.mode]} · ` +
-        `亮度 ${led.brightness}% · 周期 ${led.period_ms} ms · ` +
-        (led.active_high ? '高电平点亮' : '低电平点亮');
-      $('ledPreview').style.setProperty('--ledColor', led.mode === 0 ? '#3a4a46' : '#ffc857');
-      $('ledPreview').style.setProperty('--ledOpacity', led.mode === 0 ? '.25' : '1');
 
-      if (ledEditing) return;
-      $('brightness').value = led.brightness;
-      $('period').value = led.period_ms;
-      $('ledGpio').value = led.gpio;
-      $('ledPolarity').value = led.active_high ? '1' : '0';
-      $('brightLabel').textContent = `${led.brightness}%`;
-      $('periodLabel').textContent = `${led.period_ms} ms`;
-      [...$('ledMode').children].forEach(button => {
-        button.classList.toggle('active', Number(button.dataset.mode) === led.mode);
-      });
-    }
-
-    /* Two pollers write this pill: /api/status every 2.5 s and
-     * /api/ble/status every 700 ms while a scan runs.  They have to derive the
-     * same text from the same state, or the indicator flips back and forth. */
-    function renderBleSelfPill(connected, hostReady) {
-      const pill = $('bleSelfPill');
-      pill.textContent = connected
-        ? '手机已连接'
-        : hostReady ? 'GATT 可连接' : 'BLE 主机未就绪';
-      pill.className = `pill ${connected || hostReady ? 'ok' : 'error'}`;
-    }
-
-    function renderBleSummary(ble) {
-      $('bleAdvPill').textContent = ble.connected
-        ? `手机已连接 · ${ble.adv_name}`
-        : ble.advertising ? `可连接广播中 · ${ble.adv_name}` : '广播关闭';
-      $('bleAdvPill').className = `pill ${ble.connected || ble.advertising ? 'ok' : ''}`;
-      renderBleSelfPill(ble.connected === true, ble.host_ready === true);
-      $('advToggle').textContent = ble.connected
-        ? '停止自动广播' : ble.advertising ? '停止广播' : '开启广播';
-      if (document.activeElement !== $('advName')) {
-        $('advName').value = ble.adv_name || '';
-      }
-    }
 
     function renderSta(sta) {
-      $('staMeta').textContent = sta.connected
-        ? `已连接 ${sta.ssid} · IP ${sta.ip} · 网关 ${sta.gateway} · ${sta.rssi} dBm`
-        : sta.configured ? `正在连接 ${sta.ssid}...` : '未配置';
+      if (sta.connected) {
+        $('staMeta').textContent =
+          `已连接 ${sta.ssid} · IP ${sta.ip} · 网关 ${sta.gateway} · ${sta.rssi} dBm`;
+        return;
+      }
+      if (!sta.configured) {
+        $('staMeta').textContent = '未配置';
+        return;
+      }
+      /* The reason code is what you search for, the hint is what tells you to
+       * check the password (15) or the band (201).  Show both. */
+      const gaveUp = sta.retry > 0 && sta.retry >= sta.retry_max
+        ? ` · 已重试 ${sta.retry} 次放弃，需重新点连接` : '';
+      if (sta.reason && sta.reason_hint) {
+        $('staMeta').textContent =
+          `连接失败 ${sta.ssid} · 原因码 ${sta.reason}（${sta.reason_hint}）${gaveUp}`;
+      } else if (sta.reason) {
+        $('staMeta').textContent =
+          `连接失败 ${sta.ssid} · 原因码 ${sta.reason}${gaveUp}`;
+      } else {
+        $('staMeta').textContent = `正在连接 ${sta.ssid}...`;
+      }
     }
 
     function renderNetworks(data) {
@@ -620,188 +487,6 @@
         $('linkState').className = 'error';
       }
     }
-
-    /* ---------------- LED ---------------- */
-    let ledSaveTimer = null;
-    let ledResetTimer = null;
-    function currentLedPayload() {
-      const active = [...$('ledMode').children].find(button => button.classList.contains('active'));
-      return {
-        gpio: Number($('ledGpio').value),
-        mode: active ? Number(active.dataset.mode) : 0,
-        brightness: Number($('brightness').value),
-        period_ms: Number($('period').value),
-        active_high: $('ledPolarity').value === '1',
-      };
-    }
-    async function pushLed(immediate) {
-      ledEditing = true;
-      clearTimeout(ledSaveTimer);
-      /* Cancel a pending "editing finished" timer from the previous request:
-       * if it fired now it would drop the guard mid-edit and let the 2.5 s
-       * status poll rewrite the sliders under the user's finger. */
-      clearTimeout(ledResetTimer);
-      const send = async () => {
-        try { await postJson('/api/led', currentLedPayload()); }
-        catch (error) { $('ledMeta').textContent = `LED 设置失败：${error.message}`; }
-        finally {
-          clearTimeout(ledResetTimer);
-          ledResetTimer = setTimeout(() => { ledEditing = false; }, 400);
-        }
-      };
-      if (immediate) await send();
-      else ledSaveTimer = setTimeout(send, 180);
-    }
-    $('ledMode').addEventListener('click', event => {
-      const button = event.target.closest('button');
-      if (!button) return;
-      [...$('ledMode').children].forEach(item => item.classList.remove('active'));
-      button.classList.add('active');
-      pushLed(true);
-    });
-    $('brightness').addEventListener('input', event => {
-      $('brightLabel').textContent = `${event.target.value}%`;
-      pushLed(false);
-    });
-    $('period').addEventListener('input', event => {
-      $('periodLabel').textContent = `${event.target.value} ms`;
-      pushLed(false);
-    });
-    $('ledGpio').addEventListener('change', () => pushLed(true));
-    $('ledPolarity').addEventListener('change', () => pushLed(true));
-
-    /* ---------------- BLE ---------------- */
-    let bleTimer = null;
-    let bleScanning = false;
-
-    function bleStateLabel(state) {
-      return { idle: '空闲', running: '扫描中', done: '已完成', error: '出错' }[state] || state;
-    }
-
-    function renderBleDevices(data) {
-      const body = $('bleDevices');
-      body.replaceChildren();
-      if (!data.ble_devices.length) {
-        emptyRow(body, data.scan_state === 'running' ? '正在监听广播...' : '未发现正在广播的 BLE 设备', 5);
-        return;
-      }
-      data.ble_devices.forEach(device => {
-        const row = document.createElement('tr');
-        row.appendChild(cell(device.name || 'Unknown'));
-        row.appendChild(cell(device.address, 'mono'));
-        const rssi = cell(`${device.rssi} dBm`, 'num');
-        rssi.prepend(signalBars(device.rssi));
-        row.appendChild(rssi);
-        row.appendChild(cell(device.seen, 'num'));
-        row.appendChild(cell(device.address_type, 'security'));
-        body.appendChild(row);
-      });
-    }
-
-    function renderBleDiag(data) {
-      const diag = data.diag;
-      const rows = [
-        ['NimBLE 主机就绪', diag.host_ready ? '是' : '否'],
-        ['控制器状态', `${diag.controller_status} (${diag.controller_ok ? 'ENABLED' : '未启用'})`],
-        ['地址配置 rc', `${diag.last_sync_rc}`],
-        ['上次扫描 rc', `${diag.last_scan_rc}`],
-        ['上次广播 rc', `${diag.last_adv_rc}`],
-        ['主机复位次数', `${diag.host_resets}`],
-        ['累计广播报文', `${diag.adv_reports}`],
-        ['本次扫描报文', `${diag.adv_reports_scan}`],
-        ['扫描启动次数', `${diag.scan_runs}`],
-        ['扫描超时次数', `${diag.scan_timeouts}`],
-        ['广播启动次数', `${diag.adv_starts}`],
-        ['本机地址', diag.own_address ? `${diag.own_address} (${diag.own_address_type})` : '未知'],
-      ];
-      const box = $('bleDiag');
-      box.replaceChildren();
-      rows.forEach(([key, value]) => {
-        const item = document.createElement('div');
-        const b = document.createElement('b'); b.textContent = key;
-        const i = document.createElement('i'); i.textContent = value;
-        item.append(b, i);
-        box.appendChild(item);
-      });
-    }
-
-    function renderBleStatus(data) {
-      $('bleMeta').textContent =
-        `${data.ble_count} 个广播设备 · 扫描序号 ${data.ble_scan_id} · 原始报文 ${data.diag.adv_reports_scan}`;
-      renderBleSelfPill(data.connected === true, data.diag.host_ready === true);
-      $('bleStatePill').textContent = `状态 ${bleStateLabel(data.scan_state)}`;
-      $('bleStatePill').className = 'pill ' +
-        (data.scan_state === 'error' ? 'error' : data.scan_state === 'done' ? 'ok' : '');
-      renderBleDevices(data);
-      renderBleDiag(data);
-
-      const total = data.diag.scan_duration_ms || 1;
-      const elapsed = Math.min(data.diag.scan_elapsed_ms || 0, total);
-      $('bleProgress').style.width = `${Math.round(elapsed / total * 100)}%`;
-
-      if (data.scan_state !== 'running') {
-        bleScanning = false;
-        clearInterval(bleTimer);
-        bleTimer = null;
-        $('bleScanButton').disabled = false;
-        $('bleScanButton').textContent = '开始扫描';
-        $('bleStopButton').disabled = true;
-        if (data.scan_state === 'error') {
-          const rc = data.diag.last_scan_rc;
-          const hint = rc === 30 ? '（BLE 主机未就绪）' : rc === 13 ? '（扫描超时，控制器没回事件）' : '';
-          $('bleMeta').textContent += ` · 失败 rc=${rc}${hint}`;
-        }
-      } else {
-        /* A scan may already be running (for example right after a page
-         * reload): keep the stop button usable. */
-        $('bleStopButton').disabled = false;
-      }
-    }
-
-    async function pollBle() {
-      try { renderBleStatus(await fetchJson('/api/ble/status')); }
-      catch (error) { $('bleMeta').textContent = `BLE 状态读取失败：${error.message}`; }
-    }
-
-    $('bleScanButton').addEventListener('click', async event => {
-      const button = event.currentTarget;
-      button.disabled = true; button.textContent = '启动中...';
-      $('bleProgress').style.width = '0%';
-      try {
-        await postJson('/api/ble/scan/start', { duration_ms: Number($('bleDuration').value) });
-        bleScanning = true;
-        button.textContent = '扫描中...';
-        $('bleStopButton').disabled = false;
-        await pollBle();
-        clearInterval(bleTimer);
-        bleTimer = setInterval(pollBle, 700);
-      } catch (error) {
-        $('bleMeta').textContent = `无法启动扫描：${error.message}`;
-        button.disabled = false; button.textContent = '开始扫描';
-        /* A 409 means the device is already scanning: mirror that state so the
-         * stop button works.  The interval clears itself on the first poll
-         * that reports the scan is no longer running. */
-        await pollBle();
-        clearInterval(bleTimer);
-        bleTimer = setInterval(pollBle, 700);
-      }
-    });
-    $('bleStopButton').addEventListener('click', async () => {
-      try { await postJson('/api/ble/scan/stop'); } catch (error) { /* ignore */ }
-      await pollBle();
-    });
-    $('advToggle').addEventListener('click', async event => {
-      const button = event.currentTarget;
-      const enable = status && status.ble.connected
-        ? false : !(status && status.ble.advertising);
-      button.disabled = true;
-      try {
-        await postJson('/api/ble/adv', { enabled: enable, name: $('advName').value.trim() });
-        await refresh();
-      } catch (error) {
-        $('bleMeta').textContent = `广播切换失败：${error.message}`;
-      } finally { button.disabled = false; }
-    });
 
     /* ---------------- 引脚 ---------------- */
     async function pinAction(action, level) {
@@ -910,7 +595,7 @@
       $('linkState').textContent = 'REBOOTING'; $('linkState').className = 'warn';
     });
     $('factoryButton').addEventListener('click', async () => {
-      if (!confirm('恢复出厂设置会清空 NVS（LED 设置、广播名等），确定继续？')) return;
+      if (!confirm('恢复出厂设置会清空 NVS（Wi-Fi 密码、AI 接口设置、新闻源），确定继续？')) return;
       try { await postJson('/api/system', { action: 'factory_reset' }); } catch (error) { /* device restarts */ }
       $('linkState').textContent = 'FACTORY RESET'; $('linkState').className = 'warn';
     });

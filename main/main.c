@@ -18,9 +18,9 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
-#include "ble_scanner.h"
+#include "chat_ws.h"
+#include "device_api.h"
 #include "gpio_panel.h"
-#include "led_control.h"
 #include "log_ring.h"
 
 #define AP_SSID "Yao Yao Ling Xian !"
@@ -60,6 +60,16 @@ static char s_sta_ssid[33];
 static char s_sta_ip[16] = "0.0.0.0";
 static char s_sta_gw[16] = "0.0.0.0";
 static int s_sta_rssi;
+/* Last WIFI_EVENT_STA_DISCONNECTED reason.  Without it "STA 连不上" is a
+ * dead end: 15 means the password is wrong, 201 means the AP was never heard,
+ * 202 means it rejected the credentials outright. */
+static int s_sta_reason;
+
+/* Credentials live in their own namespace so a factory reset of the LLM
+ * settings does not silently take the network down with it. */
+#define NVS_WIFI_NAMESPACE "wifi_cfg"
+#define NVS_KEY_WIFI_SSID "ssid"
+#define NVS_KEY_WIFI_PASS "password"
 
 extern const unsigned char index_html_start[]
     asm("_binary_index_html_start");
@@ -185,6 +195,148 @@ static esp_err_t scan_wifi(void)
     return ESP_OK;
 }
 
+/* Turn a 802.11 reason code into something a person can act on.  The numbers
+ * on their own are the single least useful part of a failed association. */
+static const char *wifi_reason_hint(int reason)
+{
+    switch (reason) {
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+        return "四次握手超时，通常是密码不对";
+    case WIFI_REASON_NO_AP_FOUND:
+        return "没扫到这个 AP：确认是 2.4GHz、SSID 没打错、在覆盖范围内";
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+        return "AP 的加密方式不支持（WPA3-Enterprise 之类）";
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+        return "信号低于阈值，离路由器近一点";
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_AUTH_EXPIRE:
+        return "认证失败，密码不对";
+    case WIFI_REASON_ASSOC_FAIL:
+    case WIFI_REASON_ASSOC_EXPIRE:
+        return "关联被拒：路由器可能开了 MAC 过滤或连接数已满";
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+        return "握手超时，信号太弱或路由器响应慢";
+    case WIFI_REASON_CONNECTION_FAIL:
+        return "连接失败，信号太弱或被 AP 拒绝";
+    case WIFI_REASON_BEACON_TIMEOUT:
+        return "信标丢失，信号太弱或路由器刚重启";
+    case WIFI_REASON_NOT_AUTHED:
+    case WIFI_REASON_NOT_ASSOCED:
+        return "AP 掉线了（路由器重启或踢掉了本机）";
+    default:
+        return NULL;
+    }
+}
+
+static void save_sta_credentials(const char *ssid, const char *password)
+{
+    nvs_handle_t handle;
+    if (nvs_open(NVS_WIFI_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+        ESP_LOGW(TAG, "unable to store Wi-Fi credentials");
+        return;
+    }
+
+    esp_err_t err = nvs_set_str(handle, NVS_KEY_WIFI_SSID, ssid);
+    if (err == ESP_OK) {
+        err = nvs_set_str(handle, NVS_KEY_WIFI_PASS, password);
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+
+    /* Logged explicitly: "did it actually persist?" is otherwise only
+     * answerable by power-cycling the board and seeing what happens. */
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Wi-Fi credentials for \"%s\" stored in NVS", ssid);
+    } else {
+        ESP_LOGE(TAG, "storing Wi-Fi credentials failed: %s",
+                 esp_err_to_name(err));
+    }
+}
+
+static bool load_sta_credentials(char *ssid, size_t ssid_size, char *password,
+                                 size_t password_size)
+{
+    nvs_handle_t handle;
+    if (nvs_open(NVS_WIFI_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) {
+        return false;
+    }
+
+    size_t length = ssid_size;
+    bool found = nvs_get_str(handle, NVS_KEY_WIFI_SSID, ssid, &length) ==
+                 ESP_OK && ssid[0] != '\0';
+    if (found) {
+        length = password_size;
+        password[0] = '\0';
+        nvs_get_str(handle, NVS_KEY_WIFI_PASS, password, &length);
+    }
+    nvs_close(handle);
+    return found;
+}
+
+static void clear_sta_credentials(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open(NVS_WIFI_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+        return;
+    }
+    nvs_erase_key(handle, NVS_KEY_WIFI_SSID);
+    nvs_erase_key(handle, NVS_KEY_WIFI_PASS);
+    nvs_commit(handle);
+    nvs_close(handle);
+}
+
+/**
+ * Point the STA at a network and start connecting.
+ *
+ * sta.ssid and sta.password are fixed-size fields that are NOT NUL-terminated
+ * on the wire: a 32 character SSID or a 64 character passphrase has to survive
+ * verbatim, and strlcpy() would silently drop the last byte.  sta_config is
+ * zero initialised, so the unused tail is already NUL padded.
+ */
+static esp_err_t apply_sta_config(const char *ssid, const char *password)
+{
+    wifi_config_t sta_config = {0};
+
+    size_t ssid_length = strlen(ssid);
+    if (ssid_length > sizeof(sta_config.sta.ssid)) {
+        ssid_length = sizeof(sta_config.sta.ssid);
+    }
+    memcpy(sta_config.sta.ssid, ssid, ssid_length);
+
+    size_t password_length = strlen(password);
+    if (password_length > sizeof(sta_config.sta.password)) {
+        password_length = sizeof(sta_config.sta.password);
+    }
+    memcpy(sta_config.sta.password, password, password_length);
+
+    sta_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+
+    /* Suppress the auto-reconnect until the new credentials are in place: the
+     * disconnect below posts STA_DISCONNECTED, and reconnecting with the old
+     * SSID would race the config change. */
+    s_sta_configured = false;
+    s_sta_retry = 0;
+    s_sta_reason = 0;
+    esp_wifi_disconnect();
+
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &sta_config);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    strlcpy(s_sta_ssid, ssid, sizeof(s_sta_ssid));
+    s_sta_configured = true;
+    return ESP_OK;
+}
+
 static void wifi_event_handler(void *argument, esp_event_base_t base,
                                int32_t event_id, void *event_data)
 {
@@ -192,24 +344,37 @@ static void wifi_event_handler(void *argument, esp_event_base_t base,
 
     if (base == WIFI_EVENT) {
         switch (event_id) {
-        case WIFI_EVENT_STA_CONNECTED:
+        case WIFI_EVENT_STA_CONNECTED: {
+            const wifi_event_sta_connected_t *event =
+                (const wifi_event_sta_connected_t *)event_data;
             s_sta_connected = true;
-            ESP_LOGI(TAG, "STA associated with \"%s\"", s_sta_ssid);
+            s_sta_reason = 0;
+            ESP_LOGI(TAG, "STA associated with \"%s\" on channel %u",
+                     s_sta_ssid, event != NULL ? event->channel : 0);
             break;
+        }
         case WIFI_EVENT_STA_DISCONNECTED: {
+            const wifi_event_sta_disconnected_t *event =
+                (const wifi_event_sta_disconnected_t *)event_data;
             s_sta_connected = false;
+            s_sta_reason = event != NULL ? (int)event->reason : 0;
+            s_sta_rssi = event != NULL ? event->rssi : 0;
             strlcpy(s_sta_ip, "0.0.0.0", sizeof(s_sta_ip));
             strlcpy(s_sta_gw, "0.0.0.0", sizeof(s_sta_gw));
-            s_sta_rssi = 0;
+
+            const char *hint = wifi_reason_hint(s_sta_reason);
+            ESP_LOGW(TAG, "STA disconnected from \"%s\": reason %d%s%s",
+                     s_sta_ssid, s_sta_reason, hint != NULL ? " - " : "",
+                     hint != NULL ? hint : "");
+
             if (s_sta_configured && s_sta_retry < STA_CONNECT_RETRY_MAX) {
                 s_sta_retry++;
-                ESP_LOGW(TAG, "STA disconnected; reconnect attempt %d/%d",
-                         s_sta_retry, STA_CONNECT_RETRY_MAX);
+                ESP_LOGW(TAG, "reconnect attempt %d/%d", s_sta_retry,
+                         STA_CONNECT_RETRY_MAX);
                 esp_wifi_connect();
-            } else {
-                ESP_LOGW(TAG, "STA disconnected%s", s_sta_configured
-                                                       ? " (retries exhausted)"
-                                                       : "");
+            } else if (s_sta_configured) {
+                ESP_LOGE(TAG, "giving up after %d attempts (reason %d)",
+                         STA_CONNECT_RETRY_MAX, s_sta_reason);
             }
             break;
         }
@@ -224,6 +389,7 @@ static void wifi_event_handler(void *argument, esp_event_base_t base,
         esp_ip4addr_ntoa(&event->ip_info.ip, s_sta_ip, sizeof(s_sta_ip));
         esp_ip4addr_ntoa(&event->ip_info.gw, s_sta_gw, sizeof(s_sta_gw));
         s_sta_retry = 0;
+        s_sta_reason = 0;
         ESP_LOGI(TAG, "STA acquired IP %s (gw %s)", s_sta_ip, s_sta_gw);
     }
 }
@@ -240,6 +406,14 @@ static void init_wifi(void)
     ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_config));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+
+    /* The IDF default country is "01" (world safe), which allows channels 1-11
+     * only.  A router sitting on channel 12 or 13 is then simply invisible:
+     * the STA reports NO_AP_FOUND (201) no matter how many times the password
+     * is retyped.  Widening to 1-13 removes that entire failure class. */
+    esp_err_t country_err = esp_wifi_set_country_code("CN", true);
+    ESP_LOGI(TAG, "Wi-Fi country CN, channels 1-13 (%s)",
+             esp_err_to_name(country_err));
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL, NULL));
@@ -263,12 +437,13 @@ static void init_wifi(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    /* Wi-Fi power save is the number one cause of a BLE scan that sees
-     * nothing: the STA keeps the radio parked in its own sleep window and the
-     * coexistence scheduler never hands a slot to the Bluetooth controller.
-     * Turning it off costs a little idle current and makes BLE reliable. */
+    /* Keep the radio awake.  Modem sleep parks the STA in its own DTIM window,
+     * which adds a full beacon interval of latency to the WebSocket carrying
+     * the chat stream - and a stalled read on that socket is exactly what
+     * makes a streaming answer look like it froze.  The board is USB powered,
+     * so the idle current is not worth the jitter. */
     esp_err_t ps_err = esp_wifi_set_ps(WIFI_PS_NONE);
-    ESP_LOGI(TAG, "Wi-Fi power save disabled for BLE coexistence (%s)",
+    ESP_LOGI(TAG, "Wi-Fi power save disabled for low-latency sockets (%s)",
              esp_err_to_name(ps_err));
 
     /* The AP channel follows the STA channel in APSTA mode, so anchor the AP
@@ -277,6 +452,31 @@ static void init_wifi(void)
     wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
     if (esp_wifi_get_channel(&primary, &second) == ESP_OK) {
         ESP_LOGI(TAG, "Wi-Fi channel %u", primary);
+    }
+}
+
+/**
+ * Rejoin the network saved by the last successful connect.
+ *
+ * Without this the STA link dies on every power cycle and the chat panel -
+ * which needs the board itself to reach the model - stops working until
+ * someone re-types the password in the dashboard.
+ */
+static void connect_saved_sta(void)
+{
+    char ssid[33] = {0};
+    char password[65] = {0};
+
+    if (!load_sta_credentials(ssid, sizeof(ssid), password, sizeof(password))) {
+        ESP_LOGI(TAG, "no saved Wi-Fi credentials; connect from the dashboard");
+        return;
+    }
+
+    esp_err_t err = apply_sta_config(ssid, password);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "rejoining saved network \"%s\"", ssid);
+    } else {
+        ESP_LOGW(TAG, "rejoin \"%s\" failed: %s", ssid, esp_err_to_name(err));
     }
 }
 
@@ -459,6 +659,14 @@ static cJSON *create_status_json(void)
     cJSON_AddStringToObject(sta, "ssid", s_sta_ssid);
     cJSON_AddStringToObject(sta, "ip", s_sta_ip);
     cJSON_AddStringToObject(sta, "gateway", s_sta_gw);
+    /* The dashboard needs the raw code *and* the readable form: the code is
+     * what you search for, the hint is what tells you to check the password. */
+    cJSON_AddNumberToObject(sta, "reason", s_sta_reason);
+    const char *reason_hint = wifi_reason_hint(s_sta_reason);
+    cJSON_AddStringToObject(sta, "reason_hint",
+                            reason_hint != NULL ? reason_hint : "");
+    cJSON_AddNumberToObject(sta, "retry", s_sta_retry);
+    cJSON_AddNumberToObject(sta, "retry_max", STA_CONNECT_RETRY_MAX);
 
     if (s_sta_connected) {
         wifi_ap_record_t info = {0};
@@ -467,25 +675,6 @@ static cJSON *create_status_json(void)
         }
     }
     cJSON_AddNumberToObject(sta, "rssi", s_sta_rssi);
-
-    led_state_t led;
-    led_control_get_state(&led);
-    cJSON *led_json = cJSON_AddObjectToObject(root, "led");
-    cJSON_AddNumberToObject(led_json, "gpio", led.gpio);
-    cJSON_AddNumberToObject(led_json, "mode", led.mode);
-    cJSON_AddNumberToObject(led_json, "brightness", led.brightness);
-    cJSON_AddNumberToObject(led_json, "period_ms", led.period_ms);
-    cJSON_AddBoolToObject(led_json, "active_high", led.active_high);
-
-    ble_scanner_diag_t diag;
-    ble_scanner_get_diag(&diag);
-    cJSON *ble = cJSON_AddObjectToObject(root, "ble");
-    cJSON_AddBoolToObject(ble, "advertising", diag.advertising);
-    cJSON_AddBoolToObject(ble, "connected", diag.connected);
-    cJSON_AddStringToObject(ble, "adv_name", diag.adv_name);
-    cJSON_AddBoolToObject(ble, "host_ready", diag.host_ready);
-    cJSON_AddNumberToObject(ble, "unique_devices", diag.unique_devices);
-    cJSON_AddNumberToObject(ble, "adv_reports", diag.adv_reports);
 
     add_network_list(root);
     cJSON_AddNumberToObject(root, "log_lines", log_ring_total_lines());
@@ -545,234 +734,6 @@ static esp_err_t scan_handler(httpd_req_t *request)
     return send_json(request, root);
 }
 
-static esp_err_t led_handler(httpd_req_t *request)
-{
-    char *body = read_json_body(request);
-    if (body == NULL) {
-        return send_error_json(request, "400 Bad Request", "Missing JSON body");
-    }
-
-    cJSON *root = cJSON_Parse(body);
-    free(body);
-    if (root == NULL) {
-        return send_error_json(request, "400 Bad Request", "Malformed JSON");
-    }
-
-    led_state_t current;
-    led_control_get_state(&current);
-
-    const cJSON *gpio_item = cJSON_GetObjectItem(root, "gpio");
-    const cJSON *mode_item = cJSON_GetObjectItem(root, "mode");
-    const cJSON *brightness_item = cJSON_GetObjectItem(root, "brightness");
-    const cJSON *period_item = cJSON_GetObjectItem(root, "period_ms");
-    const cJSON *polarity_item = cJSON_GetObjectItem(root, "active_high");
-
-    int gpio = cJSON_IsNumber(gpio_item) ? gpio_item->valueint : current.gpio;
-    bool active_high = cJSON_IsBool(polarity_item)
-                           ? cJSON_IsTrue(polarity_item)
-                           : current.active_high;
-    int mode = cJSON_IsNumber(mode_item) ? mode_item->valueint
-                                         : (int)current.mode;
-    int brightness = cJSON_IsNumber(brightness_item)
-                         ? brightness_item->valueint
-                         : current.brightness;
-    int period = cJSON_IsNumber(period_item) ? period_item->valueint
-                                             : current.period_ms;
-
-    cJSON_Delete(root);
-
-    if (mode < LED_MODE_OFF || mode > LED_MODE_BREATHE) {
-        return send_error_json(request, "400 Bad Request", "Invalid LED mode");
-    }
-
-    /* Clamp before narrowing to uint8_t/uint16_t: the casts would otherwise
-     * wrap (brightness=300 -> 44, period_ms=70000 -> 4464) and quietly apply a
-     * value the client never asked for. */
-    if (brightness < 0) {
-        brightness = 0;
-    } else if (brightness > 100) {
-        brightness = 100;
-    }
-    if (period < LED_MIN_PERIOD_MS) {
-        period = LED_MIN_PERIOD_MS;
-    } else if (period > LED_MAX_PERIOD_MS) {
-        period = LED_MAX_PERIOD_MS;
-    }
-
-    esp_err_t err = led_control_configure(gpio, active_high);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "LED GPIO%d rejected: %s", gpio, esp_err_to_name(err));
-        return send_error_json(request, "400 Bad Request",
-                               "GPIO cannot drive an LED (6-11 are flash pins, "
-                               "12/15 are strapping pins, 34-39 are input only)");
-    }
-
-    led_control_set_mode((led_mode_t)mode, (uint8_t)brightness,
-                         (uint16_t)period);
-    led_control_save();
-
-    ESP_LOGI(TAG, "LED -> GPIO%d mode=%d brightness=%d%% period=%dms %s", gpio,
-             mode, brightness, period,
-             active_high ? "active-high" : "active-low");
-
-    return send_ok_json(request);
-}
-
-static esp_err_t ble_status_handler(httpd_req_t *request)
-{
-    /* 40 devices x 56 bytes = 2240 bytes, which does not belong on the HTTP
-     * task stack. esp_http_server serves every request from a single task, so
-     * a file-scope buffer is safe here and avoids a per-poll heap allocation
-     * (the UI polls this endpoint every 700 ms while a scan is running). */
-    static ble_scanner_device_t devices[BLE_SCANNER_MAX_DEVICES];
-    size_t device_count =
-        ble_scanner_get_devices(devices, BLE_SCANNER_MAX_DEVICES);
-    ble_scanner_diag_t diag;
-    ble_scanner_get_diag(&diag);
-
-    cJSON *root = cJSON_CreateObject();
-    if (root == NULL) {
-        return send_error_json(request, "500 Internal Server Error", "OOM");
-    }
-
-    cJSON_AddNumberToObject(root, "ble_count", device_count);
-    cJSON_AddNumberToObject(root, "ble_scan_id", ble_scanner_get_scan_id());
-    cJSON_AddBoolToObject(root, "advertising", diag.advertising);
-    cJSON_AddBoolToObject(root, "connected", diag.connected);
-    cJSON_AddStringToObject(root, "adv_name", diag.adv_name);
-    char command_result[48];
-    ble_scanner_get_command_result(command_result, sizeof(command_result));
-    cJSON_AddStringToObject(root, "command_result", command_result);
-
-    static const char *state_names[] = {"idle", "running", "done", "error"};
-    const char *state_name = "idle";
-    if (diag.state <= BLE_SCAN_ERROR) {
-        state_name = state_names[diag.state];
-    }
-    cJSON_AddStringToObject(root, "scan_state", state_name);
-
-    cJSON *diagnostics = cJSON_AddObjectToObject(root, "diag");
-    cJSON_AddBoolToObject(diagnostics, "host_ready", diag.host_ready);
-    cJSON_AddBoolToObject(diagnostics, "controller_ok", diag.controller_ok);
-    cJSON_AddNumberToObject(diagnostics, "controller_status",
-                            diag.controller_status);
-    cJSON_AddNumberToObject(diagnostics, "last_sync_rc", diag.last_sync_rc);
-    cJSON_AddNumberToObject(diagnostics, "last_scan_rc", diag.last_scan_rc);
-    cJSON_AddNumberToObject(diagnostics, "last_adv_rc", diag.last_adv_rc);
-    cJSON_AddNumberToObject(diagnostics, "host_resets", diag.host_resets);
-    cJSON_AddNumberToObject(diagnostics, "adv_reports", diag.adv_reports);
-    cJSON_AddNumberToObject(diagnostics, "adv_reports_scan",
-                            diag.adv_reports_scan);
-    cJSON_AddNumberToObject(diagnostics, "scan_runs", diag.scan_runs);
-    cJSON_AddNumberToObject(diagnostics, "scan_timeouts", diag.scan_timeouts);
-    cJSON_AddNumberToObject(diagnostics, "adv_starts", diag.adv_starts);
-    cJSON_AddNumberToObject(diagnostics, "scan_duration_ms",
-                            diag.scan_duration_ms);
-    cJSON_AddNumberToObject(diagnostics, "scan_elapsed_ms",
-                            diag.scan_elapsed_ms);
-    if (diag.own_address_valid) {
-        char text[18];
-        snprintf(text, sizeof(text), "%02X:%02X:%02X:%02X:%02X:%02X",
-                 diag.own_address[5], diag.own_address[4], diag.own_address[3],
-                 diag.own_address[2], diag.own_address[1], diag.own_address[0]);
-        cJSON_AddStringToObject(diagnostics, "own_address", text);
-        cJSON_AddStringToObject(
-            diagnostics, "own_address_type",
-            ble_scanner_address_type_name(diag.own_address_type));
-    }
-
-    cJSON *device_array = cJSON_AddArrayToObject(root, "ble_devices");
-    for (size_t i = 0; i < device_count; i++) {
-        cJSON *device = cJSON_CreateObject();
-        cJSON_AddStringToObject(device, "name", devices[i].name);
-        cJSON_AddStringToObject(device, "address", devices[i].address);
-        cJSON_AddNumberToObject(device, "rssi", devices[i].rssi);
-        cJSON_AddNumberToObject(device, "seen", devices[i].seen_count);
-        cJSON_AddStringToObject(
-            device, "address_type",
-            ble_scanner_address_type_name(devices[i].address_type));
-        cJSON_AddItemToArray(device_array, device);
-    }
-
-    return send_json(request, root);
-}
-
-static esp_err_t ble_scan_start_handler(httpd_req_t *request)
-{
-    uint32_t duration_ms = BLE_SCANNER_DEFAULT_SCAN_MS;
-
-    char *body = read_json_body(request);
-    if (body != NULL) {
-        cJSON *root = cJSON_Parse(body);
-        free(body);
-        if (root != NULL) {
-            const cJSON *duration = cJSON_GetObjectItem(root, "duration_ms");
-            if (cJSON_IsNumber(duration) && duration->valueint > 0) {
-                duration_ms = (uint32_t)duration->valueint;
-            }
-            cJSON_Delete(root);
-        }
-    }
-
-    esp_err_t err = ble_scanner_start_scan(duration_ms);
-    if (err == ESP_ERR_INVALID_STATE) {
-        return send_error_json(request, "409 Conflict",
-                               "BLE is not ready or a scan is already running");
-    }
-    if (err != ESP_OK) {
-        return send_error_json(request, "503 Service Unavailable",
-                               esp_err_to_name(err));
-    }
-
-    return send_ok_json(request);
-}
-
-static esp_err_t ble_scan_stop_handler(httpd_req_t *request)
-{
-    esp_err_t err = ble_scanner_stop_scan();
-    if (err != ESP_OK) {
-        return send_error_json(request, "503 Service Unavailable",
-                               esp_err_to_name(err));
-    }
-    return send_ok_json(request);
-}
-
-static esp_err_t ble_adv_handler(httpd_req_t *request)
-{
-    char *body = read_json_body(request);
-    if (body == NULL) {
-        return send_error_json(request, "400 Bad Request", "Missing JSON body");
-    }
-
-    cJSON *root = cJSON_Parse(body);
-    free(body);
-    if (root == NULL) {
-        return send_error_json(request, "400 Bad Request", "Malformed JSON");
-    }
-
-    const cJSON *enabled_item = cJSON_GetObjectItem(root, "enabled");
-    const cJSON *name_item = cJSON_GetObjectItem(root, "name");
-    bool enabled = cJSON_IsTrue(enabled_item);
-    char name[BLE_SCANNER_ADV_NAME_SIZE] = {0};
-    if (cJSON_IsString(name_item) && name_item->valuestring != NULL) {
-        strlcpy(name, name_item->valuestring, sizeof(name));
-    }
-    cJSON_Delete(root);
-
-    esp_err_t err;
-    if (enabled) {
-        err = ble_scanner_advertising_start(name[0] != '\0' ? name : NULL);
-    } else {
-        err = ble_scanner_advertising_stop();
-    }
-
-    if (err != ESP_OK) {
-        return send_error_json(request, "503 Service Unavailable",
-                               "BLE advertising request failed");
-    }
-    return send_ok_json(request);
-}
-
 static esp_err_t gpio_handler(httpd_req_t *request)
 {
     char *body = read_json_body(request);
@@ -802,15 +763,6 @@ static esp_err_t gpio_handler(httpd_req_t *request)
 
     if (gpio < 0) {
         return send_error_json(request, "400 Bad Request", "Missing gpio");
-    }
-
-    /* The LED driver owns its pin through LEDC.  Letting the toolbox
-     * reconfigure that pad would detach the channel behind the LED driver's
-     * back, and /api/status would keep reporting an LED that no longer
-     * responds. */
-    if (led_control_owns_gpio(gpio)) {
-        return send_error_json(request, "409 Conflict",
-                               "GPIO is driven by the LED (move the LED first)");
     }
 
     cJSON *response = cJSON_CreateObject();
@@ -917,6 +869,9 @@ static esp_err_t wifi_handler(httpd_req_t *request)
         s_sta_retry = 0;
         s_sta_ssid[0] = '\0';
         esp_wifi_disconnect();
+        /* An explicit disconnect should survive a reboot, otherwise the board
+         * silently rejoins the network the user just left. */
+        clear_sta_credentials();
         ESP_LOGI(TAG, "STA disconnect requested");
         return send_ok_json(request);
     }
@@ -925,46 +880,17 @@ static esp_err_t wifi_handler(httpd_req_t *request)
         return send_error_json(request, "400 Bad Request", "Missing ssid");
     }
 
-    /* sta.ssid and sta.password are fixed-size fields that are NOT
-     * NUL-terminated on the wire: a 32 character SSID or a 64 character
-     * passphrase has to survive verbatim, and strlcpy() would silently drop
-     * the last byte. sta_config is zero initialised, so the unused tail is
-     * already NUL padded. */
-    wifi_config_t sta_config = {0};
-    size_t ssid_length = strlen(ssid);
-    if (ssid_length > sizeof(sta_config.sta.ssid)) {
-        ssid_length = sizeof(sta_config.sta.ssid);
-    }
-    memcpy(sta_config.sta.ssid, ssid, ssid_length);
-
-    size_t password_length = strlen(password);
-    if (password_length > sizeof(sta_config.sta.password)) {
-        password_length = sizeof(sta_config.sta.password);
-    }
-    memcpy(sta_config.sta.password, password, password_length);
-
-    sta_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
-
-    /* Suppress the auto-reconnect until the new credentials are in place: the
-     * disconnect below posts STA_DISCONNECTED, and reconnecting with the old
-     * SSID would race the config change. */
-    s_sta_configured = false;
-    s_sta_retry = 0;
-    esp_wifi_disconnect();
-    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &sta_config);
-    if (err != ESP_OK) {
-        return send_error_json(request, "400 Bad Request",
-                               esp_err_to_name(err));
-    }
-
-    err = esp_wifi_connect();
+    esp_err_t err = apply_sta_config(ssid, password);
     if (err != ESP_OK) {
         return send_error_json(request, "503 Service Unavailable",
                                esp_err_to_name(err));
     }
 
-    strlcpy(s_sta_ssid, ssid, sizeof(s_sta_ssid));
-    s_sta_configured = true;
+    /* Persist, so a power cycle does not lose the network.  The chat panel
+     * needs this link to reach the model, and re-typing the password after
+     * every reboot would make that feature unusable. */
+    save_sta_credentials(ssid, password);
+
     ESP_LOGI(TAG, "STA connecting to \"%s\"", ssid);
     return send_ok_json(request);
 }
@@ -1032,6 +958,43 @@ static esp_err_t logs_handler(httpd_req_t *request)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Device API for the chat tools                                             */
+/* ------------------------------------------------------------------------- */
+
+esp_err_t device_wifi_scan(void)
+{
+    return scan_wifi();
+}
+
+cJSON *device_network_summary(size_t limit)
+{
+    cJSON *networks = cJSON_CreateArray();
+    if (networks == NULL) {
+        return NULL;
+    }
+
+    /* s_ap_records is already sorted strongest first by the Wi-Fi driver. */
+    for (size_t i = 0; i < s_ap_count && i < limit; i++) {
+        cJSON *network = cJSON_CreateObject();
+        const char *ssid = s_ap_records[i].ssid[0] != '\0'
+                               ? (const char *)s_ap_records[i].ssid
+                               : "<hidden>";
+        cJSON_AddStringToObject(network, "ssid", ssid);
+        cJSON_AddNumberToObject(network, "rssi", s_ap_records[i].rssi);
+        cJSON_AddNumberToObject(network, "channel", s_ap_records[i].primary);
+        cJSON_AddStringToObject(network, "security",
+                                auth_mode_to_string(s_ap_records[i].authmode));
+        cJSON_AddItemToArray(networks, network);
+    }
+    return networks;
+}
+
+cJSON *device_status_snapshot(void)
+{
+    return create_status_json();
+}
+
+/* ------------------------------------------------------------------------- */
 /* Server                                                                    */
 /* ------------------------------------------------------------------------- */
 
@@ -1040,10 +1003,14 @@ static httpd_handle_t start_web_server(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.stack_size = 10240;
-    /* 14 route handlers are registered below, well above the IDF default of 8. */
+    /* 9 dashboard routes plus the 5 the chat panel adds, against an IDF
+     * default of 8. */
     config.max_uri_handlers = 20;
     config.recv_wait_timeout = 10;
     config.send_wait_timeout = 10;
+    /* The chat panel keeps a WebSocket open while /api/status is still being
+     * polled, so the default pool of 7 sockets is close to the limit. */
+    config.max_open_sockets = 7;
 
     httpd_handle_t server = NULL;
     ESP_ERROR_CHECK(httpd_start(&server, &config));
@@ -1053,17 +1020,6 @@ static httpd_handle_t start_web_server(void)
         {.uri = "/favicon.ico", .method = HTTP_GET, .handler = favicon_handler},
         {.uri = "/api/status", .method = HTTP_GET, .handler = status_handler},
         {.uri = "/api/scan", .method = HTTP_GET, .handler = scan_handler},
-        {.uri = "/api/led", .method = HTTP_POST, .handler = led_handler},
-        {.uri = "/api/ble/status",
-         .method = HTTP_GET,
-         .handler = ble_status_handler},
-        {.uri = "/api/ble/scan/start",
-         .method = HTTP_POST,
-         .handler = ble_scan_start_handler},
-        {.uri = "/api/ble/scan/stop",
-         .method = HTTP_POST,
-         .handler = ble_scan_stop_handler},
-        {.uri = "/api/ble/adv", .method = HTTP_POST, .handler = ble_adv_handler},
         {.uri = "/api/gpio", .method = HTTP_POST, .handler = gpio_handler},
         {.uri = "/api/adc", .method = HTTP_GET, .handler = adc_handler},
         {.uri = "/api/wifi", .method = HTTP_POST, .handler = wifi_handler},
@@ -1080,7 +1036,7 @@ static httpd_handle_t start_web_server(void)
 
 void app_main(void)
 {
-    /* Capture logs before anything else: NVS init/erase and the Wi-Fi/BLE
+    /* Capture logs before anything else: NVS init/erase and the Wi-Fi
      * bring-up are exactly the failures the web log viewer needs to show, and
      * log_ring_init() itself needs neither NVS nor the network. */
     log_ring_init();
@@ -1088,24 +1044,12 @@ void app_main(void)
     ESP_LOGI(TAG, "Booting device dashboard on %s", esp_get_idf_version());
 
     init_wifi();
+    connect_saved_sta();
 
-    esp_err_t led_err = led_control_init();
-    if (led_err != ESP_OK) {
-        ESP_LOGW(TAG, "LED driver unavailable: %s", esp_err_to_name(led_err));
-    }
 
     esp_err_t gpio_err = gpio_panel_init();
     if (gpio_err != ESP_OK) {
         ESP_LOGW(TAG, "Pin toolbox unavailable: %s", esp_err_to_name(gpio_err));
-    }
-
-    /* BLE failures must not kill the dashboard - the whole point is to be able
-     * to read the reason from the web page. */
-    esp_err_t ble_err = ble_scanner_init();
-    if (ble_err != ESP_OK) {
-        ESP_LOGE(TAG, "BLE scanner unavailable: %s - the BLE panel will report "
-                      "the failure code",
-                 esp_err_to_name(ble_err));
     }
 
     esp_err_t scan_result = scan_wifi();
@@ -1113,11 +1057,20 @@ void app_main(void)
         ESP_LOGW(TAG, "Initial scan unavailable; use the web rescan button.");
     }
 
-    start_web_server();
+    httpd_handle_t server = start_web_server();
+
+    /* The chat panel brings up its own worker task; a failure here must not
+     * take the dashboard down with it. */
+    esp_err_t chat_err = chat_register(server);
+    if (chat_err != ESP_OK) {
+        ESP_LOGE(TAG, "Chat panel unavailable: %s", esp_err_to_name(chat_err));
+    }
 
     ESP_LOGI(TAG, "========================================");
     ESP_LOGI(TAG, "Wi-Fi:    %s", AP_SSID);
     ESP_LOGI(TAG, "Password: %s", AP_PASSWORD);
-    ESP_LOGI(TAG, "Open:     http://192.168.4.1");
+    ESP_LOGI(TAG, "Dashboard: http://192.168.4.1/");
+    ESP_LOGI(TAG, "Chat:      http://192.168.4.1/chat");
+    ESP_LOGI(TAG, "Free heap: %u bytes", (unsigned)esp_get_free_heap_size());
     ESP_LOGI(TAG, "========================================");
 }

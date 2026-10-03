@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#07100f">
+  <title>ESP32 // AI 对话</title>
+  <style>
+    :root {
+      --ink: #dffcf3;
+      --muted: #77978e;
+      --panel: rgba(11, 27, 25, .78);
+      --line: rgba(116, 255, 215, .16);
+      --green: #65ffd0;
+      --amber: #ffc857;
+      --danger: #ff6b7a;
+      --blue: #72dcff;
+      --bg: #050a0a;
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 78% 8%, rgba(35, 156, 127, .13), transparent 31rem),
+        linear-gradient(rgba(101,255,208,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(101,255,208,.035) 1px, transparent 1px),
+        var(--bg);
+      background-size: auto, 32px 32px, 32px 32px, auto;
+      font-family: Bahnschrift, "Aptos Narrow", "Segoe UI", sans-serif;
+      letter-spacing: .015em;
+    }
+    main { width: min(920px, calc(100% - 32px)); margin: 0 auto; padding: 30px 0 40px; }
+    header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 22px; flex-wrap: wrap; }
+    .eyebrow, .mono, button, input, select, textarea, code, .chip { font-family: Consolas, "Lucida Console", monospace; }
+    .eyebrow { color: var(--green); font-size: 11px; letter-spacing: .22em; text-transform: uppercase; }
+    h1 { margin: 9px 0 5px; font-size: clamp(28px, 5vw, 50px); line-height: .94; letter-spacing: -.05em; font-weight: 700; }
+    h1 span { color: transparent; -webkit-text-stroke: 1px rgba(223,252,243,.52); }
+    .sub { margin: 0; color: var(--muted); font-size: 13px; }
+    .row { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: inset 0 1px rgba(255,255,255,.035), 0 24px 60px rgba(0,0,0,.22);
+      backdrop-filter: blur(10px);
+    }
+    .panel + .panel { margin-top: 16px; }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+    .panel-title { margin: 0; font-size: 17px; }
+    .panel-title small { color: var(--muted); font-size: 11px; font-weight: 400; letter-spacing: .12em; margin-left: 8px; text-transform: uppercase; }
+    .panel-meta { color: var(--muted); font: 11px Consolas, monospace; margin-top: 5px; }
+    .panel-body { padding: 18px 20px; }
+    button {
+      border: 1px solid color-mix(in srgb, var(--green) 42%, transparent);
+      color: var(--green);
+      background: color-mix(in srgb, var(--green) 7%, transparent);
+      padding: 9px 13px;
+      cursor: pointer;
+      font-size: 11px;
+      letter-spacing: .08em;
+      transition: .18s ease;
+      border-radius: 2px;
+    }
+    button:hover:not(:disabled) { background: var(--green); color: #04100d; }
+    button:disabled { cursor: not-allowed; opacity: .4; }
+    button.ghost { --green: var(--muted); }
+    button.danger { --green: var(--danger); }
+    .pill {
+      display: inline-block;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font: 11px Consolas, monospace;
+      padding: 5px 9px;
+      border-radius: 2px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .pill.ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, transparent); }
+    .pill.warn { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
+    .pill.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+
+    .thread { height: min(58vh, 520px); overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+    .thread::-webkit-scrollbar { width: 8px; }
+    .thread::-webkit-scrollbar-thumb { background: rgba(116,255,215,.18); }
+    .empty { margin: auto; color: var(--muted); font-size: 13px; text-align: center; max-width: 380px; line-height: 1.7; }
+    .turn { display: flex; flex-direction: column; gap: 6px; max-width: 84%; }
+    .turn.user { align-self: flex-end; align-items: flex-end; }
+    .turn.assistant { align-self: flex-start; align-items: flex-start; }
+    .bubble {
+      border: 1px solid var(--line);
+      background: rgba(5, 14, 13, .72);
+      padding: 10px 13px;
+      font-size: 14px;
+      line-height: 1.68;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      border-radius: 3px;
+    }
+    .turn.user .bubble { --line: rgba(255, 200, 87, .34); color: #ffe9b8; }
+    .turn.error .bubble { --line: rgba(255, 107, 122, .45); color: #ffc4cb; }
+    .chip {
+      font-size: 10.5px;
+      color: var(--blue);
+      border: 1px solid rgba(114, 220, 255, .28);
+      background: rgba(114, 220, 255, .07);
+      padding: 3px 8px;
+      border-radius: 2px;
+      letter-spacing: .04em;
+    }
+    .chip.failed { color: var(--danger); border-color: rgba(255,107,122,.35); background: rgba(255,107,122,.07); }
+    .caret { display: inline-block; width: 7px; height: 14px; margin-left: 2px; background: var(--green); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+    @keyframes blink { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
+
+    .composer { display: flex; gap: 10px; padding: 14px 20px 18px; border-top: 1px solid var(--line); align-items: flex-end; }
+    textarea {
+      flex: 1;
+      resize: none;
+      min-height: 42px;
+      max-height: 132px;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      background: rgba(4, 12, 11, .8);
+      color: var(--ink);
+      font-size: 13.5px;
+      line-height: 1.5;
+      border-radius: 2px;
+      outline: none;
+    }
+    textarea:focus { border-color: color-mix(in srgb, var(--green) 46%, transparent); }
+    label.field { display: flex; flex-direction: column; gap: 6px; font: 11px Consolas, monospace; color: var(--muted); }
+    input, select, textarea { font-size: 12.5px; }
+    input, select {
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      background: rgba(4, 12, 11, .8);
+      color: var(--ink);
+      border-radius: 2px;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: color-mix(in srgb, var(--green) 46%, transparent); }
+    .hint { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 14px 0 0; }
+    .hint code { color: var(--blue); }
+    .result-ok { color: var(--green); }
+    .result-error { color: var(--danger); }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <div class="eyebrow">On-board agent // 192.168.4.1</div>
+        <h1>CHAT <span>CORE</span></h1>
+        <p class="sub">板子做网关 · 云端出词 · 本地执行工具</p>
+      </div>
+      <div class="row" style="padding-top:6px">
+        <span class="pill" id="heapPill">堆 --</span>
+        <a class="pill" href="/">仪表盘</a>
+        <button id="settingsButton" type="button">设置</button>
+      </div>
+    </header>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">对话 <small>WebSocket 流式</small></h2>
+          <div class="panel-meta" id="chatMeta">正在连接…</div>
+        </div>
+        <div class="row">
+          <span class="pill" id="statePill">未连接</span>
+          <button id="abortButton" class="danger" type="button" disabled>停止</button>
+          <button id="clearButton" class="ghost" type="button">清空</button>
+        </div>
+      </div>
+      <div class="thread" id="thread">
+        <div class="empty" id="emptyHint">
+          还没有对话。<br>试试「把板载 LED 调成呼吸模式，慢一点」
+          或「现在 GPIO34 的电压是多少」。
+        </div>
+      </div>
+      <div class="composer">
+        <textarea id="input" rows="1" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <button id="sendButton" type="button">发送</button>
+      </div>
+    </section>
+
+    <section class="panel" id="settingsPanel" hidden>
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">接口设置 <small>存 NVS</small></h2>
+          <div class="panel-meta" id="settingsMeta">API Key 只保存在板子上，不会回传给浏览器</div>
+        </div>
+        <button id="settingsClose" class="ghost" type="button">收起</button>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <label class="field" style="flex:1 1 320px">
+            <span>Base URL（OpenAI 兼容的 /chat/completions 地址）</span>
+            <input type="text" id="baseUrl" spellcheck="false" placeholder="https://api.deepseek.com/chat/completions">
+          </label>
+          <label class="field" style="flex:1 1 220px">
+            <span>模型名</span>
+            <input type="text" id="model" spellcheck="false" placeholder="deepseek-flash">
+          </label>
+        </div>
+        <div class="row">
+          <label class="field" style="flex:1 1 320px">
+            <span>API Key <i id="keyHint">（未保存）</i></span>
+            <input type="password" id="apiKey" spellcheck="false" autocomplete="off" placeholder="留空表示沿用已保存的 Key">
+          </label>
+          <label class="field" style="min-width:140px">
+            <span>最大回复长度</span>
+            <input type="number" id="maxTokens" min="64" max="2048" step="64" value="512">
+          </label>
+        </div>
+        <div class="row">
+          <label class="field" style="flex:1 1 100%">
+            <span>系统提示词</span>
+            <input type="text" id="systemPrompt" spellcheck="false">
+          </label>
+        </div>
+
+        <div class="row" style="margin-top:18px">
+          <label class="field" style="flex:1 1 100%">
+            <span>新闻源（RSS，一行一个；<code>#</code> 开头当注释）</span>
+            <textarea id="newsFeeds" spellcheck="false"
+                      style="flex:none;min-height:76px"
+                      placeholder="https://www.chinanews.com.cn/rss/importnews.xml"></textarea>
+          </label>
+        </div>
+        <p class="hint">
+          模型自己不会上网，得由板子替它去拉新闻。留空则用内置的两个中新网频道
+          （要闻导读 + 即时新闻）。问「今天有什么新闻」时它会先调
+          <code>read_news</code> 再回答。<b>不需要任何 API Key。</b>
+        </p>
+        <div class="row" style="margin-top:14px">
+          <button id="settingsSave" type="button">保存</button>
+          <button id="settingsTest" type="button">测试接通</button>
+        </div>
+        <p class="hint" id="settingsResult" style="margin-top:12px">--</p>
+        <p class="hint">
+          DeepSeek 填 <code>https://api.deepseek.com/chat/completions</code> +
+          模型 <code>deepseek-flash</code>。板子只做转发与工具执行，模型在云端。
+          工具：<code>read_news</code> <code>read_gpio</code>
+          <code>write_gpio</code> <code>read_adc</code> <code>scan_wifi</code>
+          <code>device_status</code>。
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const thread = $('thread');
+
+    let socket = null;
+    let currentTurn = null;
+    let currentBubble = null;
+    let streaming = false;
+    let reconnectTimer = null;
+    let emptyHint = $('emptyHint');
+
+    function setState(text, cls) {
+      $('statePill').textContent = text;
+      $('statePill').className = `pill ${cls || ''}`;
+    }
+
+    function clearEmpty() {
+      if (emptyHint && emptyHint.parentNode) {
+        emptyHint.remove();
+        emptyHint = null;
+      }
+    }
+
+    function atBottom() {
+      return thread.scrollTop + thread.clientHeight >= thread.scrollHeight - 40;
+    }
+
+    function scrollDown(force) {
+      if (force || atBottom()) thread.scrollTop = thread.scrollHeight;
+    }
+
+    function addTurn(role, text) {
+      clearEmpty();
+      const turn = document.createElement('div');
+      turn.className = `turn ${role}`;
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text || '';
+      turn.appendChild(bubble);
+      thread.appendChild(turn);
+      scrollDown(true);
+      return { turn, bubble };
+    }
+
+    function addChip(turn, name, ms, ok) {
+      const chip = document.createElement('span');
+      chip.className = `chip${ok ? '' : ' failed'}`;
+      chip.textContent = `${name} · ${ms} ms`;
+      turn.appendChild(chip);
+      scrollDown();
+    }
+
+    function beginStream() {
+      if (currentBubble) currentBubble.classList.remove('streaming');
+      currentTurn = addTurn('assistant', '');
+      currentBubble = currentTurn.bubble;
+      streaming = true;
+      $('sendButton').disabled = true;
+      $('abortButton').disabled = false;
+      $('chatMeta').textContent = '正在回答…';
+    }
+
+    function endStream() {
+      streaming = false;
+      $('sendButton').disabled = false;
+      $('abortButton').disabled = true;
+      if (currentBubble) currentBubble.classList.remove('streaming');
+      currentBubble = null;
+    }
+
+    function handle(message) {
+      switch (message.type) {
+        case 'hello':
+          setState('已连接', 'ok');
+          $('heapPill').textContent = `堆 ${Math.round(message.free_heap / 1024)} KB`;
+          $('chatMeta').textContent = message.configured
+            ? '已连接 · 就绪'
+            : '尚未配置 API Key，请点右上角「设置」';
+          if (!message.configured) {
+            setState('未配置', 'warn');
+            $('settingsPanel').hidden = false;
+          }
+          break;
+
+        case 'start':
+          beginStream();
+          break;
+
+        case 'delta':
+          if (!currentBubble) beginStream();
+          currentBubble.textContent += message.text;
+          scrollDown();
+          break;
+
+        case 'tool': {
+          if (!currentTurn) currentTurn = addTurn('assistant', '');
+          const ok = !(message.result && message.result.ok === false);
+          addChip(currentTurn.turn, message.name, message.ms, ok);
+          break;
+        }
+
+        case 'done':
+          endStream();
+          $('chatMeta').textContent = '回答完成';
+          break;
+
+        case 'aborted':
+          endStream();
+          $('chatMeta').textContent = '已停止';
+          break;
+
+        case 'cleared':
+          thread.replaceChildren();
+          const hint = document.createElement('div');
+          hint.className = 'empty';
+          hint.textContent = '对话已清空。';
+          thread.appendChild(hint);
+          $('chatMeta').textContent = '对话已清空';
+          break;
+
+        case 'error':
+          endStream();
+          addTurn('error', message.text || '请求失败');
+          $('chatMeta').textContent = '出错了';
+          setState('出错', 'error');
+          break;
+
+        case 'idle':
+          endStream();
+          break;
+
+        default:
+          break;
+      }
+    }
+
+    function connect() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      socket = new WebSocket(`${protocol}//${location.host}/ws/chat`);
+
+      socket.onopen = () => {
+        setState('已连接', 'ok');
+        /* esp_http_server answers the upgrade itself and never calls the
+         * handler for the handshake, so the board only learns the socket from
+         * a frame.  This ping is what makes the heap pill and the config state
+         * arrive at all. */
+        socket.send(JSON.stringify({ type: 'hello' }));
+      };
+
+      socket.onmessage = event => {
+        let message = null;
+        try { message = JSON.parse(event.data); } catch (error) { return; }
+        handle(message);
+      };
+
+      socket.onclose = () => {
+        setState('已断开', 'error');
+        $('chatMeta').textContent = '连接断开，3 秒后重试';
+        endStream();
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      socket.onerror = () => setState('连接异常', 'error');
+    }
+
+    function send() {
+      const text = $('input').value.trim();
+      if (!text || streaming || !socket || socket.readyState !== WebSocket.OPEN) return;
+
+      addTurn('user', text);
+      $('input').value = '';
+      autoGrow();
+      socket.send(JSON.stringify({ type: 'user', text }));
+      $('chatMeta').textContent = '已发送，等待首字…';
+    }
+
+    function autoGrow() {
+      const input = $('input');
+      input.style.height = 'auto';
+      input.style.height = `${Math.min(input.scrollHeight, 132)}px`;
+    }
+
+    $('sendButton').addEventListener('click', send);
+    $('input').addEventListener('input', autoGrow);
+    $('input').addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        send();
+      }
+    });
+    $('abortButton').addEventListener('click', () => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'abort' }));
+      }
+    });
+    $('clearButton').addEventListener('click', () => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'clear' }));
+      }
+    });
+
+    /* ---------------- 设置 ---------------- */
+
+    $('settingsButton').addEventListener('click', () => {
+      $('settingsPanel').hidden = !$('settingsPanel').hidden;
+    });
+    $('settingsClose').addEventListener('click', () => {
+      $('settingsPanel').hidden = true;
+    });
+
+    async function loadSettings() {
+      try {
+        const response = await fetch('/api/llm/config', { cache: 'no-store' });
+        const data = await response.json();
+        $('baseUrl').value = data.base_url || '';
+        $('model').value = data.model || '';
+        $('systemPrompt').value = data.system || '';
+        $('maxTokens').value = data.max_tokens || 512;
+        $('keyHint').textContent = data.has_key ? `（已保存 ${data.key_hint}）` : '（未保存）';
+        $('newsFeeds').value = data.news_feeds || '';
+        /* Fallback for the heap pill: if the WebSocket ping never made it
+         * through, this at least keeps the number honest. */
+        if (typeof data.free_heap === 'number') {
+          $('heapPill').textContent = `堆 ${Math.round(data.free_heap / 1024)} KB`;
+        }
+      } catch (error) {
+        $('settingsMeta').textContent = `读取配置失败：${error.message}`;
+      }
+    }
+
+    $('settingsSave').addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      $('settingsResult').textContent = '保存中…';
+      $('settingsResult').className = 'hint';
+
+      const payload = {
+        base_url: $('baseUrl').value.trim(),
+        model: $('model').value.trim(),
+        system: $('systemPrompt').value.trim(),
+        news_feeds: $('newsFeeds').value,
+        max_tokens: Number($('maxTokens').value) || 512,
+      };
+      const key = $('apiKey').value.trim();
+      if (key) payload.api_key = key;
+
+      try {
+        const response = await fetch('/api/llm/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (!response.ok || data.ok === false) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        $('apiKey').value = '';
+        $('settingsResult').textContent = '已保存到板子的 NVS';
+        $('settingsResult').className = 'hint result-ok';
+        await loadSettings();
+        setState('已连接', 'ok');
+        $('chatMeta').textContent = '配置已更新';
+      } catch (error) {
+        $('settingsResult').textContent = error.message;
+        $('settingsResult').className = 'hint result-error';
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    /* Tests whatever is on screen, saved or not, so a wrong model name or a
+     * 401 shows up here instead of as a silent failure in the chat. */
+    $('settingsTest').addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      $('settingsResult').textContent = '正在请求…（首次要握手 TLS，可能要几秒）';
+      $('settingsResult').className = 'hint';
+
+      const payload = {
+        base_url: $('baseUrl').value.trim(),
+        model: $('model').value.trim(),
+      };
+      const key = $('apiKey').value.trim();
+      if (key) payload.api_key = key;
+
+      try {
+        const response = await fetch('/api/llm/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (!data.ok) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        const reply = (data.reply || '').trim().replace(/\s+/g, ' ');
+        $('settingsResult').textContent =
+          `接通 · ${data.model} · ${data.latency_ms} ms · 板子剩余堆 ` +
+          `${Math.round(data.free_heap / 1024)} KB · 模型回了「${reply}」`;
+        $('settingsResult').className = 'hint result-ok';
+        setState('已连接', 'ok');
+        $('heapPill').textContent = `堆 ${Math.round(data.free_heap / 1024)} KB`;
+      } catch (error) {
+        $('settingsResult').textContent = error.message;
+        $('settingsResult').className = 'hint result-error';
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    loadSettings();
+    connect();
+  </script>
+</body>
+</html>
