@@ -4,6 +4,9 @@
 #include "esp_http_server.h"
 
 /**
+ * Web 对话服务的对外接口：由主 HTTP 服务调用以注册页面、配置和 WebSocket 路由。
+ * 对话历史、排队请求及连接状态均封装在实现文件中。
+ *
  * Web chat panel.
  *
  * Registers four routes on an already running server:

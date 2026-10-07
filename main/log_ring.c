@@ -1,3 +1,7 @@
+/*
+ * 内存日志环形缓冲：镜像 ESP-IDF 日志，供未接串口时的网页诊断使用。
+ * 临界区只保护槽位拷贝和序号更新，避免日志输出破坏并发读取的数据。
+ */
 #include "log_ring.h"
 
 #include <stdarg.h>
@@ -8,7 +12,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 
-#define LOG_RING_SLOTS 64
+#define LOG_RING_SLOTS 64 /* 环形缓冲最多保存的日志行数。 */
 #define LOG_RING_LINE 128
 
 typedef struct {

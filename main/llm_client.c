@@ -1,3 +1,7 @@
+/*
+ * 大模型网络客户端：持久化连接配置，发送 HTTPS 请求，并逐行解析 SSE 流。
+ * 本文件不直接操作网页或硬件，只负责把模型响应转换为文本和工具调用。
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,7 +58,7 @@ static const char *TAG = "llm";
 #define HTTP_BUF_SIZE 1024
 
 /* ------------------------------------------------------------------------- */
-/* Configuration (NVS)                                                       */
+/* NVS 配置：默认值、读取、保存与可用性判断                                  */
 /* ------------------------------------------------------------------------- */
 
 void llm_config_defaults(llm_config_t *out)
@@ -147,7 +151,7 @@ bool llm_config_ready(void)
 }
 
 /* ------------------------------------------------------------------------- */
-/* SSE stream parsing                                                        */
+/* SSE 流解析：累积数据行、文本分片和工具调用分片                            */
 /* ------------------------------------------------------------------------- */
 
 typedef struct {
@@ -159,26 +163,35 @@ typedef struct {
     char line[SSE_LINE_MAX];
     size_t line_length;
     bool overflow;
+    bool invalid_data;
+    bool saw_data;
     bool saw_done;
     bool aborted;
 } sse_context_t;
 
-static void bounded_append(char *destination, size_t capacity, size_t *length,
+static bool bounded_append(char *destination, size_t capacity, size_t *length,
                            const char *source)
 {
+    if (destination == NULL || length == NULL || source == NULL ||
+        capacity == 0 || *length >= capacity) {
+        return false;
+    }
+
     size_t available = capacity - 1 - *length;
     size_t incoming = strlen(source);
+    bool complete = incoming <= available;
 
     if (incoming > available) {
         incoming = available;
     }
     if (incoming == 0) {
-        return;
+        return complete;
     }
 
     memcpy(destination + *length, source, incoming);
     *length += incoming;
     destination[*length] = '\0';
+    return complete;
 }
 
 /* Tool call deltas are keyed by `index` and arrive split across many frames:
@@ -234,7 +247,10 @@ static void handle_delta_object(sse_context_t *context, const cJSON *delta)
 
         const cJSON *id = cJSON_GetObjectItem(item, "id");
         if (cJSON_IsString(id) && id->valuestring != NULL) {
-            strlcpy(slot->id, id->valuestring, sizeof(slot->id));
+            if (strlcpy(slot->id, id->valuestring, sizeof(slot->id)) >=
+                sizeof(slot->id)) {
+                slot->truncated = true;
+            }
         }
 
         const cJSON *function = cJSON_GetObjectItem(item, "function");
@@ -244,13 +260,20 @@ static void handle_delta_object(sse_context_t *context, const cJSON *delta)
 
         const cJSON *name = cJSON_GetObjectItem(function, "name");
         if (cJSON_IsString(name) && name->valuestring != NULL) {
-            strlcpy(slot->name, name->valuestring, sizeof(slot->name));
+            if (strlcpy(slot->name, name->valuestring, sizeof(slot->name)) >=
+                sizeof(slot->name)) {
+                slot->truncated = true;
+            }
         }
 
         const cJSON *arguments = cJSON_GetObjectItem(function, "arguments");
         if (cJSON_IsString(arguments) && arguments->valuestring != NULL) {
-            bounded_append(slot->arguments, sizeof(slot->arguments),
-                           &slot->arguments_len, arguments->valuestring);
+            if (!bounded_append(slot->arguments, sizeof(slot->arguments),
+                                &slot->arguments_len,
+                                arguments->valuestring)) {
+                /* 截断后的 JSON 可能改变工具含义，绝不能继续执行硬件操作。 */
+                slot->truncated = true;
+            }
         }
     }
 }
@@ -285,6 +308,13 @@ static void handle_sse_line(sse_context_t *context, const char *line,
     const cJSON *delta =
         cJSON_IsObject(choice) ? cJSON_GetObjectItem(choice, "delta") : NULL;
     if (cJSON_IsObject(delta)) {
+        const cJSON *content = cJSON_GetObjectItem(delta, "content");
+        const cJSON *calls = cJSON_GetObjectItem(delta, "tool_calls");
+        if ((cJSON_IsString(content) && content->valuestring != NULL &&
+             content->valuestring[0] != '\0') ||
+            (cJSON_IsArray(calls) && cJSON_GetArraySize(calls) > 0)) {
+            context->saw_data = true;
+        }
         handle_delta_object(context, delta);
     }
 
@@ -292,7 +322,7 @@ static void handle_sse_line(sse_context_t *context, const char *line,
 }
 
 /* ------------------------------------------------------------------------- */
-/* Request                                                                   */
+/* HTTPS 请求：发送 JSON、解释错误码并驱动 SSE 读取循环                      */
 /* ------------------------------------------------------------------------- */
 
 static void set_error(char *error, size_t error_size, const char *message)
@@ -370,6 +400,15 @@ esp_err_t llm_stream_request(const llm_config_t *config, const char *body,
                              volatile bool *abort, char *error,
                              size_t error_size)
 {
+    if (config == NULL || body == NULL || tool_calls == NULL ||
+        tool_count == NULL) {
+        set_error(error, error_size, "请求参数不完整");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (error != NULL && error_size > 0) {
+        error[0] = '\0';
+    }
     memset(tool_calls, 0, sizeof(llm_tool_call_t) * LLM_MAX_TOOL_CALLS);
     *tool_count = 0;
 
@@ -409,10 +448,16 @@ esp_err_t llm_stream_request(const llm_config_t *config, const char *body,
         goto cleanup;
     }
 
-    if (esp_http_client_write(client, body, body_length) !=
-        (int)body_length) {
-        set_error(error, error_size, "请求发送失败");
-        goto cleanup;
+    /* TCP 写入允许短写；循环发送，避免网络拥塞时误报失败。 */
+    size_t sent = 0;
+    while (sent < body_length) {
+        int written = esp_http_client_write(client, body + sent,
+                                            body_length - sent);
+        if (written <= 0) {
+            set_error(error, error_size, "请求发送失败");
+            goto cleanup;
+        }
+        sent += (size_t)written;
     }
 
     if (esp_http_client_fetch_headers(client) < 0) {
@@ -430,11 +475,14 @@ esp_err_t llm_stream_request(const llm_config_t *config, const char *body,
         describe_error_body(raw, detail, sizeof(detail));
 
         const char *hint = http_status_hint(status);
-        if (hint != NULL) {
-            snprintf(error, error_size, "HTTP %d（%s）%.90s", status, hint,
-                     detail);
-        } else {
-            snprintf(error, error_size, "HTTP %d %.110s", status, detail);
+        if (error != NULL && error_size > 0) {
+            if (hint != NULL) {
+                snprintf(error, error_size, "HTTP %d（%s）%.90s", status,
+                         hint, detail);
+            } else {
+                snprintf(error, error_size, "HTTP %d %.110s", status,
+                         detail);
+            }
         }
         goto cleanup;
     }
@@ -485,6 +533,9 @@ esp_err_t llm_stream_request(const llm_config_t *config, const char *body,
                 }
                 handle_sse_line(&context, context.line,
                                 context.line_length);
+            } else {
+                /* 记住任意一行的溢出；不能在下一行到来时把错误状态洗掉。 */
+                context.invalid_data = true;
             }
             context.line_length = 0;
             context.overflow = false;
@@ -495,9 +546,42 @@ esp_err_t llm_stream_request(const llm_config_t *config, const char *body,
         }
     }
 
+    /* 部分兼容服务会直接关闭连接而不补最后一个换行，仍要解析尾行。 */
+    if (!context.saw_done && context.line_length > 0 && !context.overflow) {
+        context.line[context.line_length] = '\0';
+        if (context.line_length > 0 &&
+            context.line[context.line_length - 1] == '\r') {
+            context.line[--context.line_length] = '\0';
+        }
+        handle_sse_line(&context, context.line, context.line_length);
+    }
+
+    if (context.overflow || context.invalid_data) {
+        set_error(error, error_size, "模型响应单行过长，已拒绝不完整数据");
+        result = ESP_ERR_INVALID_SIZE;
+        goto cleanup;
+    }
+
+    if (!context.aborted && !context.saw_data) {
+        set_error(error, error_size, "服务返回了空响应或非 SSE 数据");
+        result = ESP_ERR_INVALID_RESPONSE;
+        goto cleanup;
+    }
+
     size_t used = 0;
     for (size_t i = 0; i < LLM_MAX_TOOL_CALLS; i++) {
         if (tool_calls[i].used) {
+            if (tool_calls[i].truncated) {
+                set_error(error, error_size,
+                          "工具调用参数过长，已阻止执行以避免误操作");
+                result = ESP_ERR_INVALID_SIZE;
+                goto cleanup;
+            }
+            if (tool_calls[i].id[0] == '\0' || tool_calls[i].name[0] == '\0') {
+                set_error(error, error_size, "模型返回了不完整的工具调用");
+                result = ESP_ERR_INVALID_RESPONSE;
+                goto cleanup;
+            }
             used++;
         }
     }

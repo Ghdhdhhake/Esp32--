@@ -1,3 +1,7 @@
+/*
+ * RSS 新闻模块：保存新闻源配置，下载 XML/Atom 内容，提取并清洗条目，
+ * 供网页和 AI 的 read_news 工具使用。
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,16 +20,16 @@ static const char *TAG = "rss";
 #define NVS_NAMESPACE "news_cfg"
 #define NVS_KEY_FEEDS "feeds"
 
-/* Two verified 中新网 channels: 要闻导读 for the headlines, 即时新闻 for
- * whatever just broke.  Both return ~30 items and update continuously. */
+/* 默认使用两个中新网频道：要闻导读覆盖重点头条，即时新闻覆盖突发动态；
+ * 两者均持续更新，通常各返回约 30 条记录。 */
 #define DEFAULT_FEEDS                                                     \
     "https://www.chinanews.com.cn/rss/importnews.xml\n"                   \
     "https://www.chinanews.com.cn/rss/scroll-news.xml"
 
 #define FEED_TIMEOUT_MS 15000
 #define FEED_HTTP_BUF 1024
-/* A 中新网 feed is ~16 KB.  Truncating mid-feed is harmless here because we
- * scan for complete <item> blocks, so the first few items still parse. */
+/* 单个新闻源通常约 16 KB。即使到达上限，只解析完整的 <item> 块，
+ * 前部已完整到达的条目仍可安全使用。 */
 #define FEED_BODY_MAX 24576
 
 /* ------------------------------------------------------------------------- */
@@ -239,7 +243,11 @@ static esp_err_t fetch(const char *url, char **body_out)
     while (total < FEED_BODY_MAX - 1) {
         int received =
             esp_http_client_read(client, body + total, FEED_BODY_MAX - 1 - total);
-        if (received <= 0) {
+        if (received < 0) {
+            /* 已读到部分内容也不能算成功，否则会把断线后的残缺 XML 当新闻。 */
+            goto cleanup;
+        }
+        if (received == 0) {
             break;
         }
         total += (size_t)received;

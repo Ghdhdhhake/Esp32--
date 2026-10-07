@@ -1,3 +1,7 @@
+/*
+ * 设备主控模块：启动 NVS、Wi-Fi AP/STA、GPIO 面板和 HTTP 服务，
+ * 并向网页与 AI 工具提供统一的状态、网络扫描和设备控制接口。
+ */
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,7 +81,7 @@ extern const unsigned char index_html_end[]
     asm("_binary_index_html_end");
 
 /* ------------------------------------------------------------------------- */
-/* Wi-Fi helpers                                                             */
+/* Wi-Fi 辅助函数：扫描、配置持久化与事件状态同步                            */
 /* ------------------------------------------------------------------------- */
 
 static const char *auth_mode_to_string(wifi_auth_mode_t auth_mode)
@@ -481,7 +485,7 @@ static void connect_saved_sta(void)
 }
 
 /* ------------------------------------------------------------------------- */
-/* HTTP helpers                                                              */
+/* HTTP 辅助函数：限制请求体、统一 JSON 响应和错误格式                       */
 /* ------------------------------------------------------------------------- */
 
 static char *read_json_body(httpd_req_t *request)
@@ -567,7 +571,7 @@ static esp_err_t send_ok_json(httpd_req_t *request)
 }
 
 /* ------------------------------------------------------------------------- */
-/* Status                                                                    */
+/* 状态快照：把芯片、AP、STA、内存和扫描结果序列化为 JSON                    */
 /* ------------------------------------------------------------------------- */
 
 static void add_network_list(cJSON *root)
@@ -683,7 +687,7 @@ static cJSON *create_status_json(void)
 }
 
 /* ------------------------------------------------------------------------- */
-/* Handlers                                                                  */
+/* HTTP 路由处理函数                                                         */
 /* ------------------------------------------------------------------------- */
 
 static esp_err_t index_handler(httpd_req_t *request)
@@ -958,7 +962,7 @@ static esp_err_t logs_handler(httpd_req_t *request)
 }
 
 /* ------------------------------------------------------------------------- */
-/* Device API for the chat tools                                             */
+/* 供聊天工具调用的设备 API                                                  */
 /* ------------------------------------------------------------------------- */
 
 esp_err_t device_wifi_scan(void)
@@ -995,7 +999,7 @@ cJSON *device_status_snapshot(void)
 }
 
 /* ------------------------------------------------------------------------- */
-/* Server                                                                    */
+/* Web 服务初始化与路由注册                                                  */
 /* ------------------------------------------------------------------------- */
 
 static httpd_handle_t start_web_server(void)

@@ -7,6 +7,9 @@
 #include "esp_err.h"
 
 /**
+ * RSS/Atom 新闻源接口：配置以多行 URL 保存，运行时返回已清洗的 JSON 条目。
+ * 由调用者持有并释放成功返回的 cJSON 数组。
+ *
  * RSS / Atom 新闻抓取 —— 不需要任何 API Key。
  *
  * 模型自己不会上网，板子在线也不等于模型知道今天的新闻。这个模块让板子
@@ -31,7 +34,7 @@ void rss_config_defaults(rss_config_t *out);
 esp_err_t rss_config_load(rss_config_t *out);
 esp_err_t rss_config_save(const rss_config_t *config);
 
-/** True once at least one non-comment feed URL is configured. */
+/** 至少配置一个非注释新闻源 URL 时返回 true。 */
 bool rss_config_ready(const rss_config_t *config);
 
 /**

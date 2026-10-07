@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- 设备控制台：仅通过 REST API 展示状态、控制 GPIO/ADC/Wi-Fi，并轮询诊断日志。 -->
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -323,6 +324,7 @@
   </main>
 
   <script>
+    // 页面脚本分为状态渲染、外设控制、Wi-Fi 管理和日志轮询四部分；所有请求均走 JSON API。
     const $ = id => document.getElementById(id);
     const byId = $;
 
@@ -378,6 +380,7 @@
     /* ---------------- 状态轮询 ---------------- */
     let status = null;
 
+    // 将一次 /api/status 响应拆分渲染到各个仪表与表格，避免 DOM 状态彼此耦合。
     function renderStatus(data) {
       status = data;
       const d = data.device, ap = data.ap, sta = data.sta;
@@ -489,6 +492,7 @@
     }
 
     /* ---------------- 引脚 ---------------- */
+    // GPIO 操作完成后立即刷新状态，使按钮反馈与实际引脚配置保持一致。
     async function pinAction(action, level) {
       try {
         const result = await postJson('/api/gpio', {
@@ -534,6 +538,7 @@
       });
       context.stroke();
     }
+    // ADC 定时采样仅在开关打开后运行，并保留有限数量的数据点绘制趋势线。
     async function sampleAdc() {
       try {
         const data = await fetchJson(`/api/adc?channel=${$('adcChannel').value}`);
@@ -602,6 +607,7 @@
 
     /* ---------------- 日志 ---------------- */
     let logTimer = null;
+    // 日志单独轮询，避免频繁刷新设备状态时反复传输较大的日志文本。
     async function pullLogs() {
       try {
         const data = await fetchJson('/api/logs');

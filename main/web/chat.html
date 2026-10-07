@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- AI 对话页：通过 WebSocket 接收流式文本与工具事件，HTTP 接口仅用于配置和连通性测试。 -->
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -252,6 +253,7 @@
   </main>
 
   <script>
+    // WebSocket 负责会话生命周期；当前气泡在流式阶段持续追加文本，完成后再固定为历史消息。
     const $ = id => document.getElementById(id);
     const thread = $('thread');
 
@@ -321,6 +323,7 @@
       currentBubble = null;
     }
 
+    // 统一分发固件定义的 hello、start、delta、tool、done、error 等协议事件。
     function handle(message) {
       switch (message.type) {
         case 'hello':
@@ -387,6 +390,7 @@
       }
     }
 
+    // 连接断开后延时重连，避免网络切换期间快速循环创建 WebSocket。
     function connect() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       socket = new WebSocket(`${protocol}//${location.host}/ws/chat`);
@@ -462,6 +466,7 @@
       $('settingsPanel').hidden = true;
     });
 
+    // 设置接口不会回传 API Key 全文，页面只展示已配置状态和安全提示。
     async function loadSettings() {
       try {
         const response = await fetch('/api/llm/config', { cache: 'no-store' });

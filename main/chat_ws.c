@@ -1,3 +1,7 @@
+/*
+ * AI 对话模块：接收 WebSocket 消息，在独立任务中请求兼容 OpenAI 的接口，
+ * 将流式回复回传网页，并受控地执行模型申请的设备工具调用。
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,7 +54,7 @@ static size_t s_reply_length;
 static llm_tool_call_t s_calls[LLM_MAX_TOOL_CALLS];
 
 /* ------------------------------------------------------------------------- */
-/* WebSocket plumbing                                                        */
+/* WebSocket 基础设施：连接存活判断与异步 JSON 发送                         */
 /* ------------------------------------------------------------------------- */
 
 static bool ws_client_alive(int fd)
@@ -107,7 +111,7 @@ static void chat_emit(int fd, const char *type, const char *text)
 }
 
 /* ------------------------------------------------------------------------- */
-/* Tools the model may call                                                  */
+/* 模型可调用的受控工具                                                      */
 /* ------------------------------------------------------------------------- */
 
 static int json_int(const cJSON *object, const char *key, int fallback)
@@ -304,7 +308,7 @@ static cJSON *execute_tool(const char *name, const cJSON *arguments)
 }
 
 /* ------------------------------------------------------------------------- */
-/* Tool schema                                                               */
+/* 工具 Schema：告知模型每个工具的名称、用途和参数                           */
 /* ------------------------------------------------------------------------- */
 
 static cJSON *add_property(cJSON *properties, const char *name, const char *type,
@@ -403,7 +407,7 @@ static cJSON *build_tools(void)
 }
 
 /* ------------------------------------------------------------------------- */
-/* Conversation history                                                      */
+/* 会话历史：保留系统提示与有限轮次，避免请求体无限增长                      */
 /* ------------------------------------------------------------------------- */
 
 static void history_reset(void)
@@ -503,7 +507,7 @@ static char *build_body(const llm_config_t *config, bool with_tools)
 }
 
 /* ------------------------------------------------------------------------- */
-/* One turn                                                                  */
+/* 单轮对话：请求模型、执行工具并把最终结果回传浏览器                        */
 /* ------------------------------------------------------------------------- */
 
 static bool delta_callback(const char *text, size_t length, void *user)
@@ -703,6 +707,37 @@ static void run_turn(const char *user_text)
          * second action ("先开灯，再把亮度调到 30"). */
     }
 
+    /* 工具轮数耗尽时，历史最后一条是 tool 结果。再发一次禁用工具的请求，
+     * 让模型把结果真正回答给用户，避免界面只收到 done 却没有正文。 */
+    char *body = build_body(&config, false);
+    if (body == NULL) {
+        chat_emit(s_ws_fd, "error", "最终回答构造失败（内存不足）");
+        return;
+    }
+
+    s_reply_length = 0;
+    s_reply[0] = '\0';
+    size_t ignored_call_count = 0;
+    char error[192] = {0};
+    esp_err_t err = llm_stream_request(&config, body, delta_callback, NULL,
+                                       s_calls, &ignored_call_count, &s_abort,
+                                       error, sizeof(error));
+    free(body);
+
+    if (err != ESP_OK) {
+        if (s_abort) {
+            if (s_reply_length > 0) {
+                history_append("assistant", s_reply);
+            }
+            chat_emit(s_ws_fd, "aborted", NULL);
+        } else {
+            chat_emit(s_ws_fd, "error",
+                      error[0] != '\0' ? error : "最终回答生成失败");
+        }
+        return;
+    }
+
+    history_append("assistant", s_reply);
     history_trim();
     chat_emit(s_ws_fd, "done", NULL);
 }
@@ -725,7 +760,7 @@ static void chat_task(void *argument)
 }
 
 /* ------------------------------------------------------------------------- */
-/* HTTP handlers                                                             */
+/* HTTP 配置页与连通性测试路由                                               */
 /* ------------------------------------------------------------------------- */
 
 static esp_err_t send_json(httpd_req_t *request, cJSON *root)
@@ -917,7 +952,7 @@ static esp_err_t config_post_handler(httpd_req_t *request)
 }
 
 /* ------------------------------------------------------------------------- */
-/* Connectivity probe                                                        */
+/* 连通性探测：用当前（含未保存）配置发起一条最小模型请求                    */
 /* ------------------------------------------------------------------------- */
 
 #define PROBE_REPLY_MAX 160
@@ -1164,7 +1199,7 @@ static esp_err_t ws_handler(httpd_req_t *request)
 }
 
 /* ------------------------------------------------------------------------- */
-/* Registration                                                              */
+/* 路由与后台对话任务注册                                                    */
 /* ------------------------------------------------------------------------- */
 
 esp_err_t chat_register(httpd_handle_t server)

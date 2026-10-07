@@ -6,6 +6,9 @@
 #include "esp_err.h"
 
 /**
+ * 网页与 AI 共用的 GPIO/ADC 抽象层。所有公开函数都会先校验引脚与运行状态，
+ * 从而阻止触碰 SPI Flash 引脚、无效 GPIO 或 Wi-Fi 下不可用的 ADC2。
+ *
  * Small pin toolbox exposed to the web UI.
  *
  * Everything here works on a single board with nothing else attached, which is
@@ -18,20 +21,20 @@
 
 esp_err_t gpio_panel_init(void);
 
-/** True when the pin exists on this chip and can be driven as an output. */
+/** 当引脚存在且可安全配置为输出时返回 true。 */
 bool gpio_panel_is_output_capable(int gpio);
 
-/** Configure `gpio` as a push-pull output and drive it to `level`. */
+/** 把 `gpio` 配置为推挽输出，并驱动到 `level` 电平。 */
 esp_err_t gpio_panel_set_output(int gpio, int level);
 
-/** Return the pin to a high-impedance input. */
+/** 将引脚释放为高阻输入。 */
 esp_err_t gpio_panel_release(int gpio);
 
-/** Sample a pin as an input, optionally with the internal pull-up enabled. */
+/** 以输入模式采样引脚，可选择是否启用内部上拉。 */
 esp_err_t gpio_panel_read_input(int gpio, bool pullup, int *level);
 
-/** GPIO backing an ADC1 channel, or -1 when the channel does not exist. */
+/** 返回 ADC1 通道对应的 GPIO；通道不存在时返回 -1。 */
 int gpio_panel_adc_gpio(int channel);
 
-/** Read an ADC1 channel; returns both the raw code and the calibrated mV. */
+/** 读取 ADC1 通道，同时返回原始码值与校准后的毫伏值。 */
 esp_err_t gpio_panel_read_adc(int channel, int *raw, int *millivolts);

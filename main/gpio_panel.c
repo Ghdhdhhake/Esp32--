@@ -1,3 +1,7 @@
+/*
+ * GPIO/ADC 面板实现：集中校验 ESP32 引脚限制，并通过互斥锁串行化
+ * 引脚重配置与 ADC 采样，避免网页和 AI 工具同时访问硬件。
+ */
 #include "gpio_panel.h"
 
 #include <string.h>
@@ -12,8 +16,8 @@
 
 static const char *TAG = "gpio_panel";
 
-/* ESP32: ADC1 channels 0..7 map to these GPIOs. ADC2 is unusable while Wi-Fi
- * is running, so it is deliberately not exposed. */
+/* ESP32 的 ADC1 通道 0..7 映射到以下 GPIO。Wi-Fi 运行时 ADC2 不可用，
+ * 因此接口刻意只暴露 ADC1。 */
 static const int s_adc1_gpio[GPIO_PANEL_ADC_CHANNELS] = {
     36, 37, 38, 39, 32, 33, 34, 35,
 };
@@ -26,8 +30,8 @@ static SemaphoreHandle_t s_lock;
 
 static bool gpio_panel_is_reserved(int gpio)
 {
-    /* GPIO 6..11 drive the SPI flash; GPIO 20/24 do not exist on the classic
-     * ESP32; GPIO 34..39 are input only. */
+    /* GPIO 6..11 连接 SPI Flash；经典 ESP32 没有 GPIO 20/24；
+     * GPIO 34..39 仅支持输入。 */
     if (gpio < 0 || gpio > GPIO_PANEL_MAX_PIN) {
         return true;
     }
